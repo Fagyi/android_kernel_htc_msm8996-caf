@@ -66,6 +66,10 @@ struct route_payload {
 	unsigned int session_id;
 };
 
+//HTC_AUD_START
+#define HTC_ONEDOTONE_DOLBY_ADM_COPP_TOPOLOGY_ID     0x10000001
+#define HTC_ADAPTIVE_DOLBY_ADM_COPP_TOPOLOGY_ID      0x10000004
+//HTC_AUD_END
 struct default_chmixer_param_id_coeff {
 	uint32_t index;
 	uint16_t num_output_channels;
@@ -179,6 +183,9 @@ int adm_get_sound_focus(int port_id, int copp_idx,
 			struct sound_focus_param *soundFocusData);
 int adm_get_source_tracking(int port_id, int copp_idx,
 			    struct source_tracking_param *sourceTrackingData);
+//HTC_AUD_START
+int q6adm_enable_effect(u16 port_id, int copp_idx, uint32_t payload_size, void *payload);
+//HTC_AUD_END
 int adm_programable_channel_mixer(int port_id, int copp_idx, int session_id,
 			int session_type,
 			struct msm_pcm_channel_mixer *ch_mixer,

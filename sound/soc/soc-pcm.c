@@ -52,7 +52,7 @@ static const struct snd_pcm_hardware no_host_hardware = {
 	 */
 	.buffer_bytes_max	= PAGE_SIZE * 4,
 };
-
+char former_device[100] = {0}; //HTC_AUDIO
 /**
  * snd_soc_runtime_activate() - Increment active count for PCM runtime components
  * @rtd: ASoC PCM runtime that is activated
@@ -183,12 +183,11 @@ int dpcm_dapm_stream_event(struct snd_soc_pcm_runtime *fe, int dir,
 
 		dev_dbg(be->dev, "ASoC: BE %s event %d dir %d\n",
 				be->dai_link->name, event, dir);
-
-		if ((event == SND_SOC_DAPM_STREAM_STOP) &&
-		    (be->dpcm[dir].users >= 1))
+		if (event == SND_SOC_DAPM_STREAM_STOP && be->dpcm[dir].users >= 1) {
+			pr_debug("%s Don't close BE \n", __func__);
 			continue;
-
-		snd_soc_dapm_stream_event(be, dir, event);
+		}
+			snd_soc_dapm_stream_event(be, dir, event);
 	}
 
 	snd_soc_dapm_stream_event(fe, dir, event);
@@ -2369,8 +2368,13 @@ static int dpcm_fe_dai_prepare(struct snd_pcm_substream *substream)
 
 	/* there is no point preparing this FE if there are no BEs */
 	if (list_empty(&fe->dpcm[stream].be_clients)) {
-		dev_err(fe->dev, "ASoC: no backend DAIs enabled for %s\n",
-				fe->dai_link->name);
+//HTC_AUD_START
+		if(strcmp(fe->dai_link->name, former_device) != 0) { //print log only if not former device
+			dev_err(fe->dev, "ASoC: no backend DAIs enabled for %s\n",
+					fe->dai_link->name);
+			strlcpy(former_device, fe->dai_link->name, sizeof(former_device)); //HTC_AUD: klockwork ID 386412
+		}
+//HTC_AUD_END
 		ret = -EINVAL;
 		goto out;
 	}

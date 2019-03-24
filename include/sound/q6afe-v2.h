@@ -96,14 +96,18 @@ enum {
 	IDX_AFE_PORT_ID_PRIMARY_MI2S_TX,
 	IDX_AFE_PORT_ID_SECONDARY_PCM_RX,
 	IDX_AFE_PORT_ID_SECONDARY_PCM_TX,
+	IDX_AFE_PORT_ID_TERTIARY_PCM_RX,
+	IDX_AFE_PORT_ID_TERTIARY_PCM_TX,
+	IDX_AFE_PORT_ID_QUATERNARY_PCM_RX,
+	IDX_AFE_PORT_ID_QUATERNARY_PCM_TX,
 	IDX_VOICE2_PLAYBACK_TX,
-	/* IDX 45->49 */
+	/* IDX 49->53 */
 	IDX_SLIMBUS_6_RX,
 	IDX_SLIMBUS_6_TX,
 	IDX_SPDIF_RX,
 	IDX_GLOBAL_CFG,
 	IDX_AUDIO_PORT_ID_I2S_RX,
-	/* IDX 50->53 */
+	/* IDX 54->57 */
 	IDX_AFE_PORT_ID_SECONDARY_MI2S_RX_SD1,
 	IDX_AFE_PORT_ID_QUINARY_MI2S_RX,
 	IDX_AFE_PORT_ID_QUINARY_MI2S_TX,
@@ -242,7 +246,7 @@ int afe_open(u16 port_id, union afe_port_config *afe_config, int rate);
 int afe_close(int port_id);
 enum lpass_clk_ver afe_get_lpass_clk_ver(void);
 int afe_loopback(u16 enable, u16 rx_port, u16 tx_port);
-int afe_sidetone(u16 tx_port_id, u16 rx_port_id, u16 enable, uint16_t gain);
+int afe_sidetone_enable(u16 tx_port_id, u16 rx_port_id,  bool enable);
 int afe_loopback_gain(u16 port_id, u16 volume);
 int afe_validate_port(u16 port_id);
 int afe_get_port_index(u16 port_id);

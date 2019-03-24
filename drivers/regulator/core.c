@@ -4551,14 +4551,12 @@ static int __init regulator_late_cleanup(struct device *dev, void *data)
 	if (rdev->use_count)
 		goto unlock;
 
-	/* If we can't read the status assume it's on. */
-	if (ops->is_enabled)
-		enabled = ops->is_enabled(rdev);
-	else
-		enabled = 1;
+	enabled = _regulator_is_enabled(rdev);
 
 	if (!enabled)
 		goto unlock;
+	else if (ops->is_enabled && !ops->is_enabled(rdev))
+		rdev_info(rdev, "actually enabled, but unused regulator\n");
 
 	if (have_full_constraints()) {
 		/* We log since this may kill the system if it goes

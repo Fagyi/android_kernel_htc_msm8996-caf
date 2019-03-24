@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,9 +17,92 @@
 #include "msm_camera_i2c_mux.h"
 #include <linux/regulator/rpm-smd-regulator.h>
 #include <linux/regulator/consumer.h>
+#ifdef CONFIG_OIS_CALIBRATION
+/*HTC_START*/
+#include "lc898123AXD_htc.h"
+/*HTC_END*/
+#endif
+/* HTC_START */
+#ifdef CONFIG_CAM_REG_LASER
+#include <linux/laser.h>
+#endif
+/* HTC_END */
 
 #undef CDBG
-#define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#define CDBG(fmt, args...) pr_info("[CAM]"fmt, ##args)
+
+#ifdef CONFIG_OIS_CALIBRATION
+/*HTC_START*/
+extern int OIS_FW_Update_Main;
+extern int OIS_FW_Update_Front;
+#define OIS_COMPONENT_I2C_ADDR_WRITE 0x7C
+
+int htc_ois_calibration(struct msm_sensor_ctrl_t *s_ctrl, int cam_id)
+{
+	int rc = -1;
+	uint16_t cci_client_sid_backup;
+    pr_info("[CAM]%s:E \n", __func__);
+    pr_info("[CAM]%s cam_id = %d\n", __func__, cam_id);
+
+	/* Bcakup the I2C slave address */
+	cci_client_sid_backup = s_ctrl->sensor_i2c_client->cci_client->sid;
+
+	/* Replace the I2C slave address with OIS component */
+	s_ctrl->sensor_i2c_client->cci_client->sid = OIS_COMPONENT_I2C_ADDR_WRITE >> 1;
+
+    /*GYRO calibration*/
+    rc = htc_GyroReCalib(s_ctrl, cam_id);
+    if (rc != 0)
+          pr_err("htc_GyroReCalib fail.\n");
+    else{
+        rc = htc_WrGyroOffsetData();
+        if (rc != 0)
+            pr_err("htc_WrGyroOffsetData fail.\n");
+        else
+            pr_info("[CAM]Gyro calibration success.\n");
+    }
+
+	/* Restore the I2C slave address */
+	s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup;
+
+	return rc;
+}
+int htc_ois_FWupdate(struct msm_sensor_ctrl_t *s_ctrl)
+{
+	int rc = -1;
+	uint16_t cci_client_sid_backup;
+    static int m_first = 0;
+    static int f_first = 0;
+    pr_info("[CAM]%s:E s_ctrl->id = %d.\n", __func__, s_ctrl->id);
+
+	/* Bcakup the I2C slave address */
+	cci_client_sid_backup = s_ctrl->sensor_i2c_client->cci_client->sid;
+
+	/* Replace the I2C slave address with OIS component */
+	s_ctrl->sensor_i2c_client->cci_client->sid = OIS_COMPONENT_I2C_ADDR_WRITE >> 1;
+
+    if (m_first ==0 && OIS_FW_Update_Main == 1)
+    {
+        pr_info("[CAM]%s:E s_ctrl->id = %d. htc_checkFWUpdate\n", __func__, s_ctrl->id);
+        rc = htc_checkFWUpdate(s_ctrl);
+        if (s_ctrl->id ==0)
+            m_first = 1;
+    } else if (f_first==0 && OIS_FW_Update_Front == 1)
+    {
+        pr_info("[CAM]%s:E s_ctrl->id = %d. htc_checkFWUpdate\n", __func__, s_ctrl->id);
+        rc = htc_checkFWUpdate(s_ctrl);
+        if (s_ctrl->id ==1)
+            f_first = 1;
+    }
+
+	/* Restore the I2C slave address */
+	s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup;
+
+	return rc;
+}
+
+/*HTC_END*/
+#endif
 
 static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl;
 static struct msm_camera_i2c_fn_t msm_sensor_secure_func_tbl;
@@ -88,7 +171,6 @@ int32_t msm_sensor_free_sensor_data(struct msm_sensor_ctrl_t *s_ctrl)
 	kfree(s_ctrl->sensordata->actuator_info);
 	kfree(s_ctrl->sensordata->power_info.gpio_conf->gpio_num_info);
 	kfree(s_ctrl->sensordata->power_info.gpio_conf->cam_gpio_req_tbl);
-	kfree(s_ctrl->sensordata->power_info.gpio_conf->cam_gpio_set_tbl);
 	kfree(s_ctrl->sensordata->power_info.gpio_conf);
 	kfree(s_ctrl->sensordata->power_info.cam_vreg);
 	kfree(s_ctrl->sensordata->power_info.power_setting);
@@ -154,6 +236,12 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 	const char *sensor_name;
 	uint32_t retry = 0;
 
+/* HTC_START, register laser */
+#ifdef CONFIG_CAM_REG_LASER
+	static int first = 1;
+#endif
+/* HTC_END */
+
 	if (!s_ctrl) {
 		pr_err("%s:%d failed: %pK\n",
 			__func__, __LINE__, s_ctrl);
@@ -175,6 +263,20 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 			sensor_i2c_client, slave_info, sensor_name);
 		return -EINVAL;
 	}
+
+/* HTC_START, register laser */
+#ifdef CONFIG_CAM_REG_LASER
+	if (first)
+	{
+		CDBG("%s: Call Laser_poweron_by_camera()", __func__);
+		Laser_poweron_by_camera();
+		CDBG("%s: Call Laser_poweroff_by_camera()", __func__);
+		Laser_poweroff_by_camera();
+		first = 0;
+		msleep(1);
+	}
+#endif
+/* HTC_END */
 
 	if (s_ctrl->set_mclk_23880000)
 		msm_sensor_adjust_mclk(power_info);
@@ -214,7 +316,9 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 			break;
 		}
 	}
-
+/*HTC_START*/
+    htc_ois_FWupdate(s_ctrl);
+/*HTC_END*/
 	return rc;
 }
 
@@ -237,6 +341,1411 @@ static uint16_t msm_sensor_id_by_mask(struct msm_sensor_ctrl_t *s_ctrl,
 	return sensor_id;
 }
 
+//HTC_START
+#define EEPROM_COMPONENT_I2C_ADDR_WRITE 0xA0
+int msm_sensor_read_fuseid(struct sensorb_cfg_data *cdata, struct msm_sensor_ctrl_t *s_ctrl)
+{
+	uint16_t address = 0;
+	uint16_t read_data = 0;
+	int rc = 0;
+	int i = 0;
+	int j = 0;
+	uint16_t cci_client_sid_backup;
+	struct msm_camera_i2c_client *sensor_i2c_client;
+	struct msm_camera_slave_info *slave_info;
+	static uint8_t main_otp[20];
+	static uint8_t defect_pixel_of_main_otp[160]; // HTC Read Defect Pixel
+	static struct pixels_array_tt pixels_array = { { { 0, 0 } }, 0 }; // HTC Read Defect Pixel
+	bool check_defect_pixel_count; // HTC Read Defect Pixel
+	int index = 0;
+	/* HTC_START Read Defect Pixel */
+	int index_for_dp = 0;
+	int pix_count = 0;
+	int y = 0;
+	int y_t = 0;
+	int x = 0;
+	int x_t = 0;
+	int delta_x = 0;
+	int delta_y = 0;
+	/* HTC_END */
+	const short id_addr[10] = {0x000D,0x000E,0x000F,0x0010,0x0011,0x0012,0x0013,0x0014,0x0015,0x0016};//S5K4E6 only
+	static uint16_t front_otp_data[10] = {0,0,0,0,0,0,0,0,0,0}; //S5K4E6 only
+	static uint16_t front_id_data[4] = {0,0,0,0}; //S5K4E6 only
+	static int32_t valid_page=-1;//S5K4E6 only
+	static int32_t SN_valid_page=-1;//S5K4E6 only
+	sensor_i2c_client = s_ctrl->sensor_i2c_client;
+	slave_info = s_ctrl->sensordata->slave_info;
+	CDBG("%s: +", __func__);
+	if (!sensor_i2c_client || !slave_info )
+	{
+		CDBG("%s: !sensor_i2c_client || !slave_info  return", __func__);
+		return 0;
+	}
+	cci_client_sid_backup = slave_info->sensor_slave_addr;
+	if(strncmp("imx377_htc", s_ctrl->sensordata->sensor_name, sizeof("imx377_htc")) == 0)
+	{
+		static int first= true;
+		if(first == true)
+		{
+		    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+		    for(address = 0; address < 0xb ; address++)
+		    {
+		        read_data = 0;
+		        msleep(1);
+		        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		        main_otp[index] = read_data & 0xff;
+		        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		        index++;
+		    }
+		    /* HTC_START Read Defect Pixel */
+		    for(address = 0x15; address <= 0xB4 ; address += 0x04 )
+		    {
+			    check_defect_pixel_count = false;
+			    for(i = 0x0; i < 0x04; i++ )
+			    {
+				    read_data = 0;
+				    msleep(1);
+				    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address+i, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+				    defect_pixel_of_main_otp[index_for_dp] = read_data & 0xff;
+				    CDBG("%s: read(0x%x, 0x%x), defect_pixel_of_main_otp[%d] = 0x%x", __func__, address+i, read_data, index_for_dp, defect_pixel_of_main_otp[index_for_dp]);
+				    if(defect_pixel_of_main_otp[index_for_dp] != 0xff)
+				    {
+				    	check_defect_pixel_count = true;
+				    }
+				    index_for_dp++;
+			    }
+			    if(check_defect_pixel_count)
+			    {
+				    CDBG("%s: defect_pixels_index : %d", __func__, pix_count);
+		
+				    y = 0;
+				    y_t = 0;
+				    y = defect_pixel_of_main_otp[index_for_dp-4];
+				    y = y << 5;
+				    y_t = defect_pixel_of_main_otp[index_for_dp-3] >> 3;
+				    pixels_array.pix[pix_count].y = y | y_t;
+		
+				    x = 0;
+				    x_t = 0;
+				    x = defect_pixel_of_main_otp[index_for_dp-3];
+				    x = x & 0x07;
+				    x = x << 8;
+				    x_t = (x | defect_pixel_of_main_otp[index_for_dp-2]) << 2;
+				    pixels_array.pix[pix_count].x =  x_t | (defect_pixel_of_main_otp[index_for_dp-1] >> 6 );
+		
+				    pixels_array.pix[pix_count].y -= 18; // for htc camif raw
+				    pixels_array.pix[pix_count++].x -= 26; // for htc camif raw
+				    CDBG("%s: pixel_x = (0x%x,%d), pixel_y = (0x%x,%d)", __func__, pixels_array.pix[pix_count-1].x, pixels_array.pix[pix_count-1].x, pixels_array.pix[pix_count-1].y, pixels_array.pix[pix_count-1].y);
+		
+				    delta_y = 0;
+				    delta_x = 0;
+				    delta_y = (defect_pixel_of_main_otp[index_for_dp-1] & 0x38) >> 3;
+				    delta_x = (defect_pixel_of_main_otp[index_for_dp-1] & 0x07);
+				    CDBG("%s: delta_y = (0x%x,%d)", __func__, delta_y, delta_y);
+				    CDBG("%s: delta_x = (0x%x,%d)", __func__, delta_x, delta_x);
+		
+				    if( delta_y != 0 || delta_x != 0)
+				    {
+				    	CDBG("%s: defect_pixels_index : %d", __func__, pix_count);
+					    if( (delta_y & 0x04) > 1 )
+					    {
+					    	pixels_array.pix[pix_count].x = pixels_array.pix[pix_count-1].x + delta_x;
+					    	pixels_array.pix[pix_count].y = pixels_array.pix[pix_count-1].y - (delta_y & 0x03);
+					    	CDBG("%s: pixel_x = (0x%x,%d), pixel_y = (0x%x,%d)", __func__, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].y, pixels_array.pix[pix_count].y);
+					    }
+					    else
+					    {
+					    	pixels_array.pix[pix_count].x = pixels_array.pix[pix_count-1].x + delta_x;
+					    	pixels_array.pix[pix_count].y = pixels_array.pix[pix_count-1].y + (delta_y & 0x03);
+					    	CDBG("%s: pixel_x = (0x%x,%d), pixel_y = (0x%x,%d)", __func__, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].y, pixels_array.pix[pix_count].y);
+					    }
+					    pix_count++;
+				    }
+			    }
+			    else
+			    {
+			    	break;
+			    }
+		    }
+		    pixels_array.count = pix_count;
+		    CDBG("%s: Total_DP_Count = %d", __func__, pixels_array.count);
+		    /* HTC_END */
+		    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x56;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x57;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x58;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x59;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+		    first= false;
+		}
+		
+		if (cdata != NULL) {
+		cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+		cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+		cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+		cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+		//vcm
+		cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+		cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+		cdata->af_value.AF_INF_MSB = main_otp[5];
+		cdata->af_value.AF_INF_LSB = main_otp[6];
+		cdata->af_value.AF_MACRO_MSB = main_otp[9];
+		cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+		pr_info("[CAM]PMEif: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+		  cdata->cfg.fuse.fuse_id_word1,
+		  cdata->cfg.fuse.fuse_id_word2,
+		  cdata->cfg.fuse.fuse_id_word3,
+		  cdata->cfg.fuse.fuse_id_word4);
+
+		pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+		pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+		pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+		pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+		cdata->af_value.VCM_VENDOR = main_otp[0];
+		
+		/* HTC_START Read Defect Pixel */
+		cdata->pixels_array.count = pixels_array.count;
+		for(i = 0 ; i < cdata->pixels_array.count ; i++)
+		{
+			cdata->pixels_array.pix[i].x = pixels_array.pix[i].x;
+			cdata->pixels_array.pix[i].y = pixels_array.pix[i].y;
+		}
+		/* HTC_END */
+
+		strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+		pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+		}
+		else {
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+		}
+	}
+    if(strncmp("s5k4e6_htc", s_ctrl->sensordata->sensor_name, sizeof("s5k4e6_htc")) == 0)
+    {
+		static int front_first= true;
+		if(front_first == true)
+        {
+            front_first= false;
+            //Read page 53~51
+            for (i = 53 ; i >= 51 ; i--)
+            {
+                // page select to 4000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0xFCFC, 0x4000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //Stream enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0100, 0x0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                msleep(10);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6028, 0x2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0x000B, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //OTP page "i" select
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, i, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0X0009, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //read enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, 0X01, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0A00, 0X0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                msleep(5);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602C, 0X2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //Read S/N
+                for (j = 0 ; j <4; j++)
+                {
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602E, id_addr[j], MSM_CAMERA_I2C_WORD_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_write failed\n", __func__);
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x6F12, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_read failed\n", __func__);
+
+                    front_id_data[j] = read_data & 0xff;
+
+                    if (read_data)
+                        SN_valid_page = i;
+                }
+
+                if (SN_valid_page!=-1)
+                    break;
+
+            }
+            //Read page 50~48
+            for (i = 50 ; i >= 48 ; i--)
+            {
+                // page select to 4000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0xFCFC, 0x4000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //Stream enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0100, 0x0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                msleep(10);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6028, 0x2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0x000B, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //OTP page "i" select
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, i, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0X0009, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //read enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, 0X01, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0A00, 0X0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                msleep(5);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602C, 0X2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //Read OTP data
+                for (j = 0 ; j <10; j++)
+                {
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602E, id_addr[j], MSM_CAMERA_I2C_WORD_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_write failed\n", __func__);
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x6F12, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_read failed\n", __func__);
+
+                    front_otp_data[j] = read_data & 0xff;
+
+                    if (read_data)
+                        valid_page = i;
+
+                }
+                if (valid_page!=-1)
+                    break;
+            }
+        }
+        if (cdata != NULL) {
+            cdata->cfg.fuse.fuse_id_word1 = front_id_data[0];
+            cdata->cfg.fuse.fuse_id_word2 = front_id_data[1];
+            cdata->cfg.fuse.fuse_id_word3 = front_id_data[2];
+            cdata->cfg.fuse.fuse_id_word4 = front_id_data[3];
+            pr_info("[CAM]s5k4e6_htc: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+                    cdata->cfg.fuse.fuse_id_word1,
+                    cdata->cfg.fuse.fuse_id_word2,
+                    cdata->cfg.fuse.fuse_id_word3,
+                    cdata->cfg.fuse.fuse_id_word4);
+            cdata->lens_id = front_otp_data[1];
+            //vcm
+            cdata->af_value.VCM_VENDOR = front_otp_data[0];
+            cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word1;
+            cdata->af_value.VCM_VENDOR_ID_VERSION = front_otp_data[4];
+            cdata->af_value.AF_INF_MSB = front_otp_data [5];
+            cdata->af_value.AF_INF_LSB = front_otp_data [6];
+            cdata->af_value.AF_MACRO_MSB = front_otp_data [7];
+            cdata->af_value.AF_MACRO_LSB = front_otp_data [8];
+            strlcpy(cdata->af_value.ACT_NAME, "lc898123", sizeof("lc898123"));
+            pr_info("[CAM]%s: s5k4e6_htcOTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+
+            pr_info("[CAM]%s: s5k4e6_htc OTP Module vendor = 0x%x\n",               __func__,  front_otp_data[0]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP LENS = 0x%x\n",                        __func__,  front_otp_data[1]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Sensor Version = 0x%x\n",              __func__,  front_otp_data[2]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  front_otp_data[3]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Actuator vender ID & Version = 0x%x\n",__func__,  front_otp_data[4]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+        }
+        else {
+            pr_info("[CAM]%s: s5k4e6_htc OTP Module vendor = 0x%x\n",               __func__,  front_otp_data[0]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP LENS = 0x%x\n",                        __func__,  front_otp_data[1]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Sensor Version = 0x%x\n",              __func__,  front_otp_data[2]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  front_otp_data[3]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Actuator vender ID & Version = 0x%x\n",__func__,  front_otp_data[4]);
+        }
+        return rc;
+
+    }
+	/* HTC_START, ov12890 */
+	if(strncmp("ov12890_htc", s_ctrl->sensordata->sensor_name, sizeof("ov12890_htc")) == 0)
+	{
+		static int first= true;
+		if(first == true)
+		{
+		    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+		    for(address = 0; address < 0xb ; address++)
+		    {
+		        read_data = 0;
+		        msleep(1);
+		        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		        main_otp[index] = read_data & 0xff;
+		        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		        index++;
+		    }
+		    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x56;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x57;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x58;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x59;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+		    first= false;
+		}
+
+		if (cdata != NULL) {
+		cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+		cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+		cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+		cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+		//vcm
+		cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+		cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+		cdata->af_value.AF_INF_MSB = main_otp[5];
+		cdata->af_value.AF_INF_LSB = main_otp[6];
+		cdata->af_value.AF_MACRO_MSB = main_otp[9];
+		cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+		pr_info("[CAM]PMEos: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+		  cdata->cfg.fuse.fuse_id_word1,
+		  cdata->cfg.fuse.fuse_id_word2,
+		  cdata->cfg.fuse.fuse_id_word3,
+		  cdata->cfg.fuse.fuse_id_word4);
+
+		pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+		pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+		pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+		pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+		cdata->af_value.VCM_VENDOR = main_otp[0];
+
+		strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+		pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+		}
+		else {
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+		}
+	}
+	if(strncmp("ov12890eco_htc", s_ctrl->sensordata->sensor_name, sizeof("ov12890eco_htc")) == 0)
+	{
+		static int first= true;
+		if(first == true)
+		{
+		    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+		    for(address = 0; address < 0xb ; address++)
+		    {
+		        read_data = 0;
+		        msleep(1);
+		        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		        main_otp[index] = read_data & 0xff;
+		        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		        index++;
+		    }
+		    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x56;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x57;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x58;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x59;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+		    first= false;
+		}
+
+		if (cdata != NULL) {
+		cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+		cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+		cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+		cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+		//vcm
+		cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+		cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+		cdata->af_value.AF_INF_MSB = main_otp[5];
+		cdata->af_value.AF_INF_LSB = main_otp[6];
+		cdata->af_value.AF_MACRO_MSB = main_otp[9];
+		cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+		pr_info("[CAM]PMEose: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+		  cdata->cfg.fuse.fuse_id_word1,
+		  cdata->cfg.fuse.fuse_id_word2,
+		  cdata->cfg.fuse.fuse_id_word3,
+		  cdata->cfg.fuse.fuse_id_word4);
+
+		pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+		pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+		pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+		pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+		cdata->af_value.VCM_VENDOR = main_otp[0];
+
+		strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+		pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+		}
+		else {
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+		}
+	}
+        if(strncmp("ov12890eco_pdaf_htc", s_ctrl->sensordata->sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
+        {
+                static int first= true;
+                if(first == true)
+                {
+                    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+                    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+                    for(address = 0; address < 0xb ; address++)
+                    {
+                        read_data = 0;
+                        msleep(1);
+                        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                        main_otp[index] = read_data & 0xff;
+                        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                        index++;
+                    }
+                    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x56;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x57;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x58;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x59;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+                    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+                    first= false;
+                }
+
+                if (cdata != NULL) {
+                cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+                cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+                cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+                cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+                //vcm
+                cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+                cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+                cdata->af_value.AF_INF_MSB = main_otp[5];
+                cdata->af_value.AF_INF_LSB = main_otp[6];
+                cdata->af_value.AF_MACRO_MSB = main_otp[9];
+                cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+                pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+                pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+                pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+                pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+                pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+                pr_info("[CAM]PMEose_pdaf: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+                  cdata->cfg.fuse.fuse_id_word1,
+                  cdata->cfg.fuse.fuse_id_word2,
+                  cdata->cfg.fuse.fuse_id_word3,
+                  cdata->cfg.fuse.fuse_id_word4);
+
+                pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+                pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+                pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+                pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+                cdata->af_value.VCM_VENDOR = main_otp[0];
+
+                strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+                pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+                }
+                else {
+                pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+                pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+                pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+                pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+                pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+                }
+        }
+	/* HTC_END */
+
+	CDBG("%s: -", __func__);
+	return 0;
+}
+#ifdef CONFIG_COMPAT
+int msm_sensor_read_fuseid32(struct sensorb_cfg_data32 *cdata, struct msm_sensor_ctrl_t *s_ctrl)
+{
+	uint16_t address = 0;
+	uint16_t read_data = 0;
+	int rc = 0;
+	int i = 0;
+	int j = 0;
+	uint16_t cci_client_sid_backup;
+	struct msm_camera_i2c_client *sensor_i2c_client;
+	struct msm_camera_slave_info *slave_info;
+	static uint8_t main_otp[20];
+	static uint8_t defect_pixel_of_main_otp[160]; // HTC Read Defect Pixel
+	static struct pixels_array_tt pixels_array = { { { 0, 0 } }, 0 }; // HTC Read Defect Pixel
+	bool check_defect_pixel_count; // HTC Read Defect Pixel
+	const short id_addr[10] = {0x000D,0x000E,0x000F,0x0010,0x0011,0x0012,0x0013,0x0014,0x0015,0x0016};//S5K4E6 only
+	static uint16_t front_otp_data[10] = {0,0,0,0,0,0,0,0,0,0}; //S5K4E6 only
+	static uint16_t front_id_data[4] = {0,0,0,0}; //S5K4E6 only
+	static int32_t valid_page=-1;//S5K4E6 only
+	static int32_t SN_valid_page=-1;//S5K4E6 only
+	int index = 0;
+	/* HTC_START Read Defect Pixel */
+	int index_for_dp = 0;
+	int pix_count = 0;
+	int y = 0;
+	int y_t = 0;
+	int x = 0;
+	int x_t = 0;
+	int delta_x = 0;
+	int delta_y = 0;
+	/* HTC_END */
+	sensor_i2c_client = s_ctrl->sensor_i2c_client;
+	slave_info = s_ctrl->sensordata->slave_info;
+	CDBG("%s: +", __func__);
+	if (!sensor_i2c_client || !slave_info )
+	{
+		CDBG("%s: !sensor_i2c_client || !slave_info  return", __func__);
+		return 0;
+	}
+	cci_client_sid_backup = slave_info->sensor_slave_addr;
+	if(strncmp("imx377_htc", s_ctrl->sensordata->sensor_name, sizeof("imx377_htc")) == 0)
+	{
+		static int first= true;
+		if(first == true)
+		{
+		    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+		    for(address = 0; address < 0xb ; address++)
+		    {
+		        read_data = 0;
+		        msleep(1);
+		        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		        main_otp[index] = read_data & 0xff;
+		        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		        index++;
+		    }
+		    /* HTC_START Read Defect Pixel */
+		    for(address = 0x15; address <= 0xB4 ; address += 0x04 )
+		    {
+			    check_defect_pixel_count = false;
+			    for(i = 0x0; i < 0x04; i++ )
+			    {
+				    read_data = 0;
+				    msleep(1);
+				    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address+i, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+				    defect_pixel_of_main_otp[index_for_dp] = read_data & 0xff;
+				    CDBG("%s: read(0x%x, 0x%x), defect_pixel_of_main_otp[%d] = 0x%x", __func__, address+i, read_data, index_for_dp, defect_pixel_of_main_otp[index_for_dp]);
+				    if(defect_pixel_of_main_otp[index_for_dp] != 0xff)
+				    {
+				    	check_defect_pixel_count = true;
+				    }
+				    index_for_dp++;
+			    }
+			    if(check_defect_pixel_count)
+			    {
+				    CDBG("%s: defect_pixels_index : %d", __func__, pix_count);
+		
+				    y = 0;
+				    y_t = 0;
+				    y = defect_pixel_of_main_otp[index_for_dp-4];
+				    y = y << 5;
+				    y_t = defect_pixel_of_main_otp[index_for_dp-3] >> 3;
+				    pixels_array.pix[pix_count].y = y | y_t;
+		
+				    x = 0;
+				    x_t = 0;
+				    x = defect_pixel_of_main_otp[index_for_dp-3];
+				    x = x & 0x07;
+				    x = x << 8;
+				    x_t = (x | defect_pixel_of_main_otp[index_for_dp-2]) << 2;
+				    pixels_array.pix[pix_count].x =  x_t | (defect_pixel_of_main_otp[index_for_dp-1] >> 6 );
+		
+				    pixels_array.pix[pix_count].y -= 18; // for htc camif raw
+				    pixels_array.pix[pix_count++].x -= 26; // for htc camif raw
+				    CDBG("%s: pixel_x = (0x%x,%d), pixel_y = (0x%x,%d)", __func__, pixels_array.pix[pix_count-1].x, pixels_array.pix[pix_count-1].x, pixels_array.pix[pix_count-1].y, pixels_array.pix[pix_count-1].y);
+		
+				    delta_y = 0;
+				    delta_x = 0;
+				    delta_y = (defect_pixel_of_main_otp[index_for_dp-1] & 0x38) >> 3;
+				    delta_x = (defect_pixel_of_main_otp[index_for_dp-1] & 0x07);
+				    CDBG("%s: delta_y = (0x%x,%d)", __func__, delta_y, delta_y);
+				    CDBG("%s: delta_x = (0x%x,%d)", __func__, delta_x, delta_x);
+		
+				    if( delta_y != 0 || delta_x != 0)
+				    {
+				    	CDBG("%s: defect_pixels_index : %d", __func__, pix_count);
+					    if( (delta_y & 0x04) > 1 )
+					    {
+					    	pixels_array.pix[pix_count].x = pixels_array.pix[pix_count-1].x + delta_x;
+					    	pixels_array.pix[pix_count].y = pixels_array.pix[pix_count-1].y - (delta_y & 0x03);
+					    	CDBG("%s: pixel_x = (0x%x,%d), pixel_y = (0x%x,%d)", __func__, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].y, pixels_array.pix[pix_count].y);
+					    }
+					    else
+					    {
+					    	pixels_array.pix[pix_count].x = pixels_array.pix[pix_count-1].x + delta_x;
+					    	pixels_array.pix[pix_count].y = pixels_array.pix[pix_count-1].y + (delta_y & 0x03);
+					    	CDBG("%s: pixel_x = (0x%x,%d), pixel_y = (0x%x,%d)", __func__, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].x, pixels_array.pix[pix_count].y, pixels_array.pix[pix_count].y);
+					    }
+					    pix_count++;
+				    }
+			    }
+			    else
+			    {
+			    	break;
+			    }
+		    }
+		    pixels_array.count = pix_count;
+		    CDBG("%s: Total_DP_Count = %d", __func__, pixels_array.count);
+		    /* HTC_END */
+		    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x56;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x57;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x58;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x59;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+	    
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+		    first= false;
+		}
+		
+		if (cdata != NULL) {
+		cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+		cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+		cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+		cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+		//vcm
+		cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+		cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+		cdata->af_value.AF_INF_MSB = main_otp[5];
+		cdata->af_value.AF_INF_LSB = main_otp[6];
+		cdata->af_value.AF_MACRO_MSB = main_otp[9];
+		cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+		pr_info("[CAM]PMEif: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+		  cdata->cfg.fuse.fuse_id_word1,
+		  cdata->cfg.fuse.fuse_id_word2,
+		  cdata->cfg.fuse.fuse_id_word3,
+		  cdata->cfg.fuse.fuse_id_word4);
+
+		pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+		pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+		pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+		pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+		cdata->af_value.VCM_VENDOR = main_otp[0];
+
+		/* HTC_START Read Defect Pixel */
+		cdata->pixels_array.count = pixels_array.count;
+		for(i = 0 ; i < cdata->pixels_array.count ; i++)
+		{
+			cdata->pixels_array.pix[i].x = pixels_array.pix[i].x;
+			cdata->pixels_array.pix[i].y = pixels_array.pix[i].y;
+		}
+		/* HTC_END */
+
+		strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+		pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+		}
+		else {
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+		}
+	}
+    if(strncmp("s5k4e6_htc", s_ctrl->sensordata->sensor_name, sizeof("s5k4e6_htc")) == 0)
+    {
+		static int front_first= true;
+		if(front_first == true)
+        {
+            front_first= false;
+            for (i = 53 ; i >= 51 ; i--)
+            {
+                // page select to 4000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0xFCFC, 0x4000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //Stream enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0100, 0x0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                msleep(10);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6028, 0x2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0x000B, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //OTP page "i" select
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, i, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0X0009, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //read enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, 0X01, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0A00, 0X0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                msleep(5);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602C, 0X2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //Read S/N
+                for (j = 0 ; j <4; j++)
+                {
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602E, id_addr[j], MSM_CAMERA_I2C_WORD_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_write failed\n", __func__);
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x6F12, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_read failed\n", __func__);
+
+                    front_id_data[j] = read_data & 0xff;
+
+                    if (read_data)
+                        SN_valid_page = i;
+
+                }
+                if (SN_valid_page!=-1)
+                    break;
+
+            }
+            //Read page 50~48
+            for (i = 50 ; i >= 48 ; i--)
+            {
+                // page select to 4000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0xFCFC, 0x4000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //Stream enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0100, 0x0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                msleep(10);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6028, 0x2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0x000B, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //OTP page "i" select
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, i, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602A, 0X0009, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                //read enable
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x6F12, 0X01, MSM_CAMERA_I2C_BYTE_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x0A00, 0X0100, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                msleep(5);
+                //page select to 2000
+                rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602C, 0X2000, MSM_CAMERA_I2C_WORD_DATA);
+                if (rc < 0)
+					pr_err("%s: i2c_write failed\n", __func__);
+
+                //Read OTP data
+                for (j = 0 ; j <10; j++)
+                {
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_write(s_ctrl->sensor_i2c_client, 0x602E, id_addr[j], MSM_CAMERA_I2C_WORD_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_write failed\n", __func__);
+                    rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(s_ctrl->sensor_i2c_client, 0x6F12, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    if (rc < 0)
+                        pr_err("%s: i2c_read failed\n", __func__);
+
+                    front_otp_data[j] = read_data & 0xff;
+
+                    if (read_data)
+                        valid_page = i;
+
+                }
+                if (valid_page!=-1)
+                    break;
+            }
+        }
+        if (cdata != NULL) {
+            cdata->cfg.fuse.fuse_id_word1 = front_id_data[0];
+            cdata->cfg.fuse.fuse_id_word2 = front_id_data[1];
+            cdata->cfg.fuse.fuse_id_word3 = front_id_data[2];
+            cdata->cfg.fuse.fuse_id_word4 = front_id_data[3];
+            pr_info("[CAM]s5k4e6_htc: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+                    cdata->cfg.fuse.fuse_id_word1,
+                    cdata->cfg.fuse.fuse_id_word2,
+                    cdata->cfg.fuse.fuse_id_word3,
+                    cdata->cfg.fuse.fuse_id_word4);
+            cdata->lens_id = front_otp_data[1];
+            //vcm
+            cdata->af_value.VCM_VENDOR = front_otp_data[0];
+            cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word1;
+            cdata->af_value.VCM_VENDOR_ID_VERSION = front_otp_data[4];
+            cdata->af_value.AF_INF_MSB = front_otp_data [5];
+            cdata->af_value.AF_INF_LSB = front_otp_data [6];
+            cdata->af_value.AF_MACRO_MSB = front_otp_data [7];
+            cdata->af_value.AF_MACRO_LSB = front_otp_data [8];
+            strlcpy(cdata->af_value.ACT_NAME, "lc898123", sizeof("lc898123"));
+            pr_info("[CAM]%s: s5k4e6_htcOTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+
+            pr_info("[CAM]%s: s5k4e6_htc OTP Module vendor = 0x%x\n",               __func__,  front_otp_data[0]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP LENS = 0x%x\n",                        __func__,  front_otp_data[1]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Sensor Version = 0x%x\n",              __func__,  front_otp_data[2]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  front_otp_data[3]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Actuator vender ID & Version = 0x%x\n",__func__,  front_otp_data[4]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+        }
+        else {
+            pr_info("[CAM]%s: s5k4e6_htc OTP Module vendor = 0x%x\n",               __func__,  front_otp_data[0]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP LENS = 0x%x\n",                        __func__,  front_otp_data[1]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Sensor Version = 0x%x\n",              __func__,  front_otp_data[2]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  front_otp_data[3]);
+            pr_info("[CAM]%s: s5k4e6_htc OTP Actuator vender ID & Version = 0x%x\n",__func__,  front_otp_data[4]);
+        }
+        return rc;
+
+    }
+	/* HTC_START, ov12890 */
+	if(strncmp("ov12890_htc", s_ctrl->sensordata->sensor_name, sizeof("ov12890_htc")) == 0)
+	{
+		static int first= true;
+		if(first == true)
+		{
+		    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+		    for(address = 0; address < 0xb ; address++)
+		    {
+		        read_data = 0;
+		        msleep(1);
+		        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		        main_otp[index] = read_data & 0xff;
+		        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		        index++;
+		    }
+		    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x56;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x57;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x58;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x59;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+		    first= false;
+		}
+
+		if (cdata != NULL) {
+		cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+		cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+		cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+		cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+		//vcm
+		cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+		cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+		cdata->af_value.AF_INF_MSB = main_otp[5];
+		cdata->af_value.AF_INF_LSB = main_otp[6];
+		cdata->af_value.AF_MACRO_MSB = main_otp[9];
+		cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+		pr_info("[CAM]PMEos: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+		  cdata->cfg.fuse.fuse_id_word1,
+		  cdata->cfg.fuse.fuse_id_word2,
+		  cdata->cfg.fuse.fuse_id_word3,
+		  cdata->cfg.fuse.fuse_id_word4);
+
+		pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+		pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+		pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+		pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+		cdata->af_value.VCM_VENDOR = main_otp[0];
+
+		strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+		pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+		}
+		else {
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+		}
+	}
+	if(strncmp("ov12890eco_htc", s_ctrl->sensordata->sensor_name, sizeof("ov12890eco_htc")) == 0)
+	{
+		static int first= true;
+		if(first == true)
+		{
+		    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+		    for(address = 0; address < 0xb ; address++)
+		    {
+		        read_data = 0;
+		        msleep(1);
+		        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		        main_otp[index] = read_data & 0xff;
+		        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		        index++;
+		    }
+		    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x56;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x57;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x58;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    msleep(1);
+		    read_data = 0;
+		    address =  0x59;
+		    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+		    main_otp[index] = read_data & 0xff;
+		    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+		    index++;
+
+		    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+		    first= false;
+		}
+
+		if (cdata != NULL) {
+		cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+		cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+		cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+		cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+		//vcm
+		cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+		cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+		cdata->af_value.AF_INF_MSB = main_otp[5];
+		cdata->af_value.AF_INF_LSB = main_otp[6];
+		cdata->af_value.AF_MACRO_MSB = main_otp[9];
+		cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+		pr_info("[CAM]PMEose: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+		  cdata->cfg.fuse.fuse_id_word1,
+		  cdata->cfg.fuse.fuse_id_word2,
+		  cdata->cfg.fuse.fuse_id_word3,
+		  cdata->cfg.fuse.fuse_id_word4);
+
+		pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+		pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+		pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+		pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+		cdata->af_value.VCM_VENDOR = main_otp[0];
+
+		strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+		pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+		}
+		else {
+		pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+		pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+		pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+		pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+		pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+		}
+	}
+        if(strncmp("ov12890eco_pdaf_htc", s_ctrl->sensordata->sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
+        {
+                static int first= true;
+                if(first == true)
+                {
+                    s_ctrl->sensor_i2c_client->cci_client->sid = EEPROM_COMPONENT_I2C_ADDR_WRITE >> 1;
+                    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_BYTE_ADDR;
+                    for(address = 0; address < 0xb ; address++)
+                    {
+                        read_data = 0;
+                        msleep(1);
+                        rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                        main_otp[index] = read_data & 0xff;
+                        CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                        index++;
+                    }
+                    s_ctrl->sensor_i2c_client->cci_client->sid = 0x56;
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x56;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x57;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x58;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    msleep(1);
+                    read_data = 0;
+                    address =  0x59;
+                    rc = sensor_i2c_client->i2c_func_tbl->i2c_read(sensor_i2c_client, address, &read_data, MSM_CAMERA_I2C_BYTE_DATA);
+                    main_otp[index] = read_data & 0xff;
+                    CDBG("%s: read(0x%x, 0x%x), main_otp[%d] = 0x%x", __func__, address, read_data, index, main_otp[index]);
+                    index++;
+
+                    sensor_i2c_client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+                    s_ctrl->sensor_i2c_client->cci_client->sid = cci_client_sid_backup >> 1;
+                    first= false;
+                }
+
+                if (cdata != NULL) {
+                cdata->cfg.fuse.fuse_id_word1 = main_otp[11];
+                cdata->cfg.fuse.fuse_id_word2 = main_otp[12];
+                cdata->cfg.fuse.fuse_id_word3 = main_otp[13];
+                cdata->cfg.fuse.fuse_id_word4 = main_otp[14];
+
+                //vcm
+                cdata->af_value.MODULE_ID_AB = cdata->cfg.fuse.fuse_id_word2;
+                cdata->af_value.VCM_VENDOR_ID_VERSION = main_otp[4];
+                cdata->af_value.AF_INF_MSB = main_otp[5];
+                cdata->af_value.AF_INF_LSB = main_otp[6];
+                cdata->af_value.AF_MACRO_MSB = main_otp[9];
+                cdata->af_value.AF_MACRO_LSB = main_otp[10];
+
+                pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+                pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+                pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+                pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+                pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+
+                pr_info("[CAM]PMEose_pdaf: fuse->fuse_id : 0x%x 0x%x 0x%x 0x%x\n",
+                  cdata->cfg.fuse.fuse_id_word1,
+                  cdata->cfg.fuse.fuse_id_word2,
+                  cdata->cfg.fuse.fuse_id_word3,
+                  cdata->cfg.fuse.fuse_id_word4);
+
+                pr_info("[CAM]%s: OTP Infinity position code (MSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_MSB);
+                pr_info("[CAM]%s: OTP Infinity position code (LSByte) = 0x%x\n", __func__,  cdata->af_value.AF_INF_LSB);
+                pr_info("[CAM]%s: OTP Macro position code (MSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_MSB);
+                pr_info("[CAM]%s: OTP Macro position code (LSByte) = 0x%x\n",    __func__,  cdata->af_value.AF_MACRO_LSB);
+
+                cdata->af_value.VCM_VENDOR = main_otp[0];
+
+                strlcpy(cdata->af_value.ACT_NAME, "lc898214_act", sizeof("lc898214_act"));
+                pr_info("[CAM]%s: OTP Actuator Name = %s\n",__func__, cdata->af_value.ACT_NAME);
+                }
+                else {
+                pr_info("[CAM]%s: OTP Module vendor = 0x%x\n",               __func__,  main_otp[0]);
+                pr_info("[CAM]%s: OTP LENS = 0x%x\n",                        __func__,  main_otp[1]);
+                pr_info("[CAM]%s: OTP Sensor Version = 0x%x\n",              __func__,  main_otp[2]);
+                pr_info("[CAM]%s: OTP Driver IC Vendor & Version = 0x%x\n",  __func__,  main_otp[3]);
+                pr_info("[CAM]%s: OTP Actuator vender ID & Version = 0x%x\n",__func__,  main_otp[4]);
+                }
+        }
+	/* HTC_END */
+
+	CDBG("%s: -", __func__);
+	return 0;
+}
+#endif
+//HTC_END
+
+//HTC_START
+int msm_sensor_get_engid(u8 *engid)
+{
+    struct device_node *devnode = of_find_node_by_path("/chosen/mfg");
+    if (devnode) {
+        if (of_property_read_u8_array(devnode, "skuid.engineer_id", engid, sizeof(u32)/sizeof(u8)) ) {
+            pr_err("%s[CAM] Failed to get property: engineer_id", __func__);
+            return (-1);
+        }
+    } else {
+        pr_err("%s[CAM] Failed to find device node", __func__);
+        return (-1);
+    }
+
+    return 0;
+}
+//HTC_END
+
 int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	int rc = 0;
@@ -244,12 +1753,17 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 	struct msm_camera_i2c_client *sensor_i2c_client;
 	struct msm_camera_slave_info *slave_info;
 	const char *sensor_name;
+//HTC_START
+	u32 eng_id = 0;
+	u8  engid[4] = {0};
+//HTC_END
 
 	if (!s_ctrl) {
 		pr_err("%s:%d failed: %pK\n",
 			__func__, __LINE__, s_ctrl);
 		return -EINVAL;
 	}
+
 	sensor_i2c_client = s_ctrl->sensor_i2c_client;
 	slave_info = s_ctrl->sensordata->slave_info;
 	sensor_name = s_ctrl->sensordata->sensor_name;
@@ -265,17 +1779,117 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 		sensor_i2c_client, slave_info->sensor_id_reg_addr,
 		&chipid, MSM_CAMERA_I2C_WORD_DATA);
 	if (rc < 0) {
+		/* HTC_START */
+		if(strncmp("imx377_htc", sensor_name, sizeof("imx377_htc")) == 0)
+		{
+			pr_err("%s: PMEif_htc: read id failed\n", __func__);
+		}
+		else if(strncmp("ov12890_htc", sensor_name, sizeof("ov12890_htc")) == 0)
+		{
+			pr_err("%s: PMEos_htc: read id failed\n", __func__);
+		}
+		else if(strncmp("ov12890eco_htc", sensor_name, sizeof("ov12890eco_htc")) == 0)
+		{
+			pr_err("%s: PMEose_htc: read id failed\n", __func__);
+		}
+                else if(strncmp("ov12890eco_pdaf_htc", sensor_name, sizeof("ov12890eco_pdaf_htc")) == 0)
+                {
+                        pr_err("%s: PMEose_pdaf_htc: read id failed\n", __func__);
+                }
+		else
+		/* HTC_END */
 		pr_err("%s: %s: read id failed\n", __func__, sensor_name);
 		return rc;
 	}
 
-	pr_debug("%s: read id: 0x%x expected id 0x%x:\n",
-			__func__, chipid, slave_info->sensor_id);
+	CDBG("%s: read id: 0x%x expected id 0x%x, name:%s\n",
+			__func__, chipid, slave_info->sensor_id, sensor_name);
 	if (msm_sensor_id_by_mask(s_ctrl, chipid) != slave_info->sensor_id) {
 		pr_err("%s chip id %x does not match %x\n",
 				__func__, chipid, slave_info->sensor_id);
 		return -ENODEV;
 	}
+//HTC_START, check imx351 cut version, read address 0x18 value, cut 1.0 for value = 0~2, cut 1.1 for value >= 3 
+	if(msm_sensor_get_engid(engid) == -1) {
+		pr_err("%s:%d[CAM] fail to get engineer id, set id to 0\n",__func__, __LINE__);
+		eng_id = 0;
+	} else {
+		eng_id = engid[3] << 24 | engid[2] << 16 | engid[1] << 8 | engid[0];
+	}
+	//bit 0 = 1 means sapphire glass
+	CDBG("%s eng_id = 0x%X  bit 0 = 0x%x", __func__, eng_id, eng_id & 0x1);
+	if(strncmp("imx351_htc", sensor_name, sizeof("imx351_htc")) == 0)
+	{
+		int rc1 = 0;
+		rc1 = sensor_i2c_client->i2c_func_tbl->i2c_read(
+		sensor_i2c_client, 0x0018,
+		&chipid, MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc1 < 0){
+			pr_err("%s[CAM] read addr 0x0018 fail\n", __func__);
+			return -ENODEV;
+		}
+		else
+		{
+			if(chipid>=0 && chipid<=2)
+			{
+				CDBG("%s cut 1.0 match ok:0x%x\n", __func__, chipid);
+				if( (eng_id & 0x1) != 0x0 )
+					pr_err("%s[CAM][assemble problem]cut1.0 with sapphire\n", __func__);
+			}
+			else
+			{
+			pr_err("%s[CAM] cut 1.0 match fail:0x%x\n", __func__, chipid);
+			return -ENODEV;
+			}
+		}
+	}
+	else if(strncmp("imx351_cut11_htc", sensor_name, sizeof("imx351_cut11_htc")) == 0)
+	{
+		int rc1 = 0;
+		rc1 = sensor_i2c_client->i2c_func_tbl->i2c_read(
+		sensor_i2c_client, 0x0018,
+		&chipid, MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc1 < 0){
+			pr_err("%s[CAM] read addr 0x0018 fail\n", __func__);
+			return -ENODEV;
+		}
+		else
+		{
+			if(chipid>=3 && ((eng_id & 0x1) == 0x0) )
+			{
+			    CDBG("%s cut 1.1 without sapphire match ok:0x%x\n", __func__, chipid);
+			}
+			else
+			{
+			    pr_err("%s[CAM] cut 1.1 without sapphire match fail:0x%x\n", __func__, chipid);
+			    return -ENODEV;
+			}
+		}
+	}
+	else if(strncmp("imx351_cut11_sapphire_htc", sensor_name, sizeof("imx351_cut11_sapphire_htc")) == 0)
+	{
+		int rc1 = 0;
+		rc1 = sensor_i2c_client->i2c_func_tbl->i2c_read(
+				sensor_i2c_client, 0x0018,
+				&chipid, MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc1 < 0){
+			pr_err("%s[CAM] read addr 0x0018 fail\n", __func__);
+			return -ENODEV;
+		}
+		else
+		{
+			if(chipid>=3 && ((eng_id & 0x1) != 0x0) )
+			{
+				CDBG("%s cut 1.1 with sapphire match ok:0x%x\n", __func__, chipid);
+			}
+			else
+			{
+				pr_err("%s[CAM] cut 1.1 with sapphire match fail:0x%x\n", __func__, chipid);
+				return -ENODEV;
+			}
+		}
+	}
+//HTC_END
 	return rc;
 }
 
@@ -378,16 +1992,22 @@ long msm_sensor_subdev_fops_ioctl(struct file *file,
 {
 	return video_usercopy(file, cmd, arg, msm_sensor_subdev_do_ioctl);
 }
-
+//HTC_START
+#if 1
+int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
+	void __user *argp)
+#else
 static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 	void __user *argp)
+#endif
+//HTC_END
 {
 	struct sensorb_cfg_data32 *cdata = (struct sensorb_cfg_data32 *)argp;
 	int32_t rc = 0;
 	int32_t i = 0;
 	mutex_lock(s_ctrl->msm_sensor_mutex);
-	CDBG("%s:%d %s cfgtype = %d\n", __func__, __LINE__,
-		s_ctrl->sensordata->sensor_name, cdata->cfgtype);
+	//CDBG("%s:%d %s cfgtype = %d\n", __func__, __LINE__,
+	//	s_ctrl->sensordata->sensor_name, cdata->cfgtype);
 	switch (cdata->cfgtype) {
 	case CFG_GET_SENSOR_INFO:
 		memcpy(cdata->cfg.sensor_info.sensor_name,
@@ -895,7 +2515,24 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 		}
 		break;
 	}
-
+	#if 1
+/* HTC_START, HTC_VCM, Harvey 20130628 - Porting read OTP*/
+	case CFG_I2C_IOCTL_R_OTP:
+		if (s_ctrl->func_tbl->sensor_i2c_read_fuseid32 == NULL) {
+			rc = -EFAULT;
+			break;
+		}
+		rc = s_ctrl->func_tbl->sensor_i2c_read_fuseid32(cdata, s_ctrl);
+	break;
+/* HTC_END, HTC_VCM*/
+#endif
+#ifdef CONFIG_OIS_CALIBRATION
+/*HTC_START GYRO calibration*/
+    case CFG_SET_GYRO_CALIBRATION:
+        rc = htc_ois_calibration(s_ctrl, cdata->cam_id);
+    break;
+/*HTC_END*/
+#endif
 	default:
 		rc = -EFAULT;
 		break;
@@ -1377,7 +3014,24 @@ int msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 		}
 		break;
 	}
-
+	#if 1
+/* HTC_START, HTC_VCM, Harvey 20130628 - Porting read OTP*/
+	case CFG_I2C_IOCTL_R_OTP:
+		if (s_ctrl->func_tbl->sensor_i2c_read_fuseid == NULL) {
+			rc = -EFAULT;
+			break;
+		}
+		rc = s_ctrl->func_tbl->sensor_i2c_read_fuseid(cdata, s_ctrl);
+	break;
+/* HTC_END, HTC_VCM*/
+#endif
+#ifdef CONFIG_OIS_CALIBRATION
+/*HTC_START GYRO calibration*/
+    case CFG_SET_GYRO_CALIBRATION:
+        rc = htc_ois_calibration(s_ctrl, cdata->cam_id);
+    break;
+/*HTC_END*/
+#endif
 	default:
 		rc = -EFAULT;
 		break;
@@ -1449,6 +3103,12 @@ static struct msm_sensor_fn_t msm_sensor_func_tbl = {
 	.sensor_power_up = msm_sensor_power_up,
 	.sensor_power_down = msm_sensor_power_down,
 	.sensor_match_id = msm_sensor_match_id,
+//HTC_START
+	.sensor_i2c_read_fuseid = msm_sensor_read_fuseid,
+#ifdef CONFIG_COMPAT
+	.sensor_i2c_read_fuseid32 =msm_sensor_read_fuseid32,
+#endif
+//HTC_END
 };
 
 static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl = {
@@ -1457,6 +3117,9 @@ static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl = {
 	.i2c_write = msm_camera_cci_i2c_write,
 	.i2c_write_table = msm_camera_cci_i2c_write_table,
 	.i2c_write_seq_table = msm_camera_cci_i2c_write_seq_table,
+/* HTC_START */
+	.i2c_write_seq = msm_camera_cci_i2c_write_seq,
+/* HTC_END */
 	.i2c_write_table_w_microdelay =
 		msm_camera_cci_i2c_write_table_w_microdelay,
 	.i2c_util = msm_sensor_cci_i2c_util,
@@ -1472,6 +3135,9 @@ static struct msm_camera_i2c_fn_t msm_sensor_qup_func_tbl = {
 	.i2c_read_seq = msm_camera_qup_i2c_read_seq,
 	.i2c_write = msm_camera_qup_i2c_write,
 	.i2c_write_table = msm_camera_qup_i2c_write_table,
+/* HTC_START */
+	.i2c_write_seq = msm_camera_qup_i2c_write_seq,
+/* HTC_END */
 	.i2c_write_seq_table = msm_camera_qup_i2c_write_seq_table,
 	.i2c_write_table_w_microdelay =
 		msm_camera_qup_i2c_write_table_w_microdelay,

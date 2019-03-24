@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2016, 2018 The Linux Foundation.
+/* Copyright (c) 2014-2016, 2018-2019 The Linux Foundation.
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -210,7 +210,8 @@ int diag_md_write(int id, unsigned char *buf, int len, int ctx)
 
 		found = 1;
 		driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
-		pr_debug("diag: wake up logging process\n");
+		atomic_inc(&driver->data_ready_notif[i]);
+		DIAG_DBUG("diag: wake up logging process\n");
 		wake_up_interruptible(&driver->wait_q);
 	}
 	mutex_unlock(&driver->diagchar_mutex);

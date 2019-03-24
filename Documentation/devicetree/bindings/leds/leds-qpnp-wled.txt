@@ -60,6 +60,9 @@ Optional properties if 'qcom,disp-type-amoled' is mentioned in DT:
 				7900, 7600, 7300, 6400, 6100, 5800.
 				If not specified, default value used is 7600.
 
+- htc,hyb-thres-low	: Same as qcom,hyb-thres. Use another setting to PMIC in low brightness.
+- htc,hyb-thres-low-wm	: The brightness value watermark to switch qcom,hyb-thres and htc,hyb-thres-low.
+
 Example:
 	qcom,leds@d800 {
 		compatible = "qcom,qpnp-wled";

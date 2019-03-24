@@ -1387,7 +1387,14 @@ static int msm_lsm_ioctl_compat(struct snd_pcm_substream *substream,
 		if (copy_from_user(&userarg32, arg, sizeof(userarg32))) {
 			dev_err(rtd->dev, "%s: err copyuser ioctl %s\n",
 				__func__, "SNDRV_LSM_EVENT_STATUS_V3_32");
+/* HTC_AUD_START */
+#if 0
 			return -EFAULT;
+#else
+			err = -EFAULT;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 
 		if (userarg32.payload_size >
@@ -1395,7 +1402,14 @@ static int msm_lsm_ioctl_compat(struct snd_pcm_substream *substream,
 			pr_err("%s: payload_size %d is invalid, max allowed = %d\n",
 				__func__, userarg32.payload_size,
 				LISTEN_MAX_STATUS_PAYLOAD_SIZE);
+/* HTC_AUD_START */
+#if 0
 			return -EINVAL;
+#else
+			err = -EINVAL;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 
 		size = sizeof(*user) + userarg32.payload_size;
@@ -1404,7 +1418,14 @@ static int msm_lsm_ioctl_compat(struct snd_pcm_substream *substream,
 			dev_err(rtd->dev,
 				"%s: Allocation failed event status size %d\n",
 				__func__, size);
+/* HTC_AUD_START */
+#if 0
 			return -EFAULT;
+#else
+			err = -EFAULT;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 		cmd = SNDRV_LSM_EVENT_STATUS_V3;
 		user->payload_size = userarg32.payload_size;
@@ -1498,6 +1519,9 @@ static int msm_lsm_ioctl_compat(struct snd_pcm_substream *substream,
 				"%s: %s: not supported if using topology\n",
 				__func__, "SET_PARAMS_32");
 			err = -EINVAL;
+/* HTC_AUD_START */
+			goto done;
+/* HTC_AUD_END */
 		}
 
 		if (copy_from_user(&det_params32, arg,
@@ -1875,13 +1899,27 @@ static int msm_lsm_ioctl(struct snd_pcm_substream *substream,
 			dev_err(rtd->dev,
 				"%s: Invalid params event_status_v3\n",
 				__func__);
+/* HTC_AUD_START */
+#if 0
 			return -EINVAL;
+#else
+			err = -EINVAL;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 		if (copy_from_user(&userarg, arg, sizeof(userarg))) {
 			dev_err(rtd->dev,
 				"%s: err copyuser event_status_v3\n",
 				__func__);
+/* HTC_AUD_START */
+#if 0
 			return -EFAULT;
+#else
+			err = -EFAULT;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 
 		if (userarg.payload_size >
@@ -1889,7 +1927,14 @@ static int msm_lsm_ioctl(struct snd_pcm_substream *substream,
 			pr_err("%s: payload_size %d is invalid, max allowed = %d\n",
 				__func__, userarg.payload_size,
 				LISTEN_MAX_STATUS_PAYLOAD_SIZE);
+/* HTC_AUD_START */
+#if 0
 			return -EINVAL;
+#else
+			err = -EINVAL;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 
 		size = sizeof(struct snd_lsm_event_status_v3) +
@@ -1899,7 +1944,14 @@ static int msm_lsm_ioctl(struct snd_pcm_substream *substream,
 			dev_err(rtd->dev,
 				"%s: Allocation failed event status size %d\n",
 				__func__, size);
+/* HTC_AUD_START */
+#if 0
 			return -EFAULT;
+#else
+			err = -EFAULT;
+			goto done;
+#endif
+/* HTC_AUD_END */
 		}
 		user->payload_size = userarg.payload_size;
 		err = msm_lsm_ioctl_shared(substream, cmd, user);

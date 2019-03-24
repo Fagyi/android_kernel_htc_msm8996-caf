@@ -124,6 +124,10 @@ enum {
 	MDSS_PANEL_BLANK_LOW_POWER,
 };
 
+enum {
+	MDSS_PANEL_POWER_EXT_EARLYOFF = 0,
+	MDSS_PANEL_POWER_EXT_LATEON,
+};
 
 enum {
 	MDSS_PANEL_LOW_PERSIST_MODE_OFF = 0,
@@ -279,6 +283,10 @@ enum mdss_intf_events {
 	MDSS_EVENT_DSI_RESET_WRITE_PTR,
 	MDSS_EVENT_PANEL_TIMING_SWITCH,
 	MDSS_EVENT_UPDATE_PARAMS,
+
+	MDSS_EVENT_PANEL_VDDIO_SWITCH_ON,
+	MDSS_EVENT_PANEL_VDDIO_SWITCH_OFF,
+
 	MDSS_EVENT_MAX,
 };
 
@@ -430,6 +438,8 @@ struct mipi_panel_info {
 	u32  init_delay;
 	u32  post_init_delay;
 	u8 default_lanes;
+
+	u32  lp11_delay;
 };
 
 struct edp_panel_info {
@@ -613,6 +623,81 @@ struct mdss_panel_roi_alignment {
 	u32 min_height;
 };
 
+/**
+ *  HTC: A Struct for Backlgith 1.0.
+ *  Apply on backlight_transfer function.
+ *  The function will base on brt_data and bl_data to transfer brt and bl value.
+ *  The brt and bl was direct map. For internal value, we will use interpolation method to get transfer value.
+ *
+ *  size: A value to save brt and bl table size.
+ *  brt_data: A point referring to brightness table related data.
+ *  bl_data: A point referring to backlight table related data
+ */
+struct htc_backlight1_table {
+	bool apply_cali;
+	int size;
+	u16 *brt_data;
+	u16 *bl_data;
+	u16 *bl_data_raw;
+};
+
+enum {
+	PANEL_POWER_CTRL_DEFAULT,
+	PANEL_POWER_CTRL_HX8396C2,
+};
+
+enum {
+	PANEL_COLOR_PROFILE_NATIVE,
+	PANEL_COLOR_PROFILE_SRGB,
+	/* Reserved ... */
+	PANEL_COLOR_PROFILE_MAX
+};
+
+/**
+ *  HTC: The formats of panel calibration data
+ *
+ *  PANEL_CALIB_NOT_SUPPORTED:  Not support calibration
+ *  PANEL_CALIB_REV_1: calibration data stored in following manner
+ *  	Brightness calibration data: 0x3B24~0x3B25
+ *			1.	Value is not zero
+ *			2.	Valid range: (x>0 && x<=20000)
+ *		R calibration data: 0x3B26~0x3B27
+ *		G calibration data: 0x3B28~0x3B29
+ *		B calibration data: 0x3B3A~0x3B3B
+ *			1.	Value is not zero
+ *			2.	Valid range: (x>0 && x<256)
+ */
+enum {
+	PANEL_CALIB_NOT_SUPPORTED = 0,
+	PANEL_CALIB_REV_1 = 1,
+};
+
+struct aod_panel_info {
+	bool supported;
+	bool enabled;
+	u32 xstart;
+	u32 ystart;
+	u32 width;
+	u32 height;
+
+	int power_state;
+	int req_state;
+	int next_state;
+	bool mode_changed;
+
+	int debug; // 0: None
+	           // 1: Reg Check Only, 2/3: Reg Check + Recovery/Workaround.
+};
+
+struct calibration_gain {
+	u16 BKL;
+	u16 R;
+	u16 G;
+	u16 B;
+};
+
+#define MAX_MDSS_BACKLIGHT 2
+
 struct mdss_panel_hdr_properties {
 	bool hdr_enabled;
 
@@ -767,6 +852,16 @@ struct mdss_panel_info {
 
 	/* HDR properties of display panel*/
 	struct mdss_panel_hdr_properties hdr_properties;
+
+	/*HTC add as below*/
+	struct htc_backlight1_table brt_bl_table[MAX_MDSS_BACKLIGHT];
+	int camera_blk;
+	int power_ctrl;
+	int cali_data_format;
+	struct aod_panel_info aod;
+	struct calibration_gain cali_gain;
+	int burst_bl_value;
+	u32 panel_color_profile;
 };
 
 struct mdss_panel_timing {
@@ -805,7 +900,7 @@ struct mdss_panel_timing {
 
 struct mdss_panel_data {
 	struct mdss_panel_info panel_info;
-	void (*set_backlight) (struct mdss_panel_data *pdata, u32 bl_level);
+	void (*set_backlight) (struct mdss_panel_data *pdata, int id, u32 bl_level);
 	int (*apply_display_setting)(struct mdss_panel_data *pdata, u32 mode);
 	unsigned char *mmss_cc_base;
 
@@ -832,10 +927,11 @@ struct mdss_panel_data {
 	/* To store dsc cfg name passed by bootloader */
 	char dsc_cfg_np_name[MDSS_MAX_PANEL_LEN];
 	struct mdss_panel_data *next;
-
 	int panel_te_gpio;
 	int panel_en_gpio;
 	struct completion te_done;
+
+	bool allow_primary_fb;
 };
 
 struct mdss_panel_debugfs_info {

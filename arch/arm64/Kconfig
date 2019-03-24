@@ -702,9 +702,7 @@ config ARCH_NR_GPIO
 
 source kernel/Kconfig.preempt
 
-config HZ
-	int
-	default 100
+source kernel/Kconfig.hz
 
 config ARCH_HAS_HOLES_MEMORYMODEL
 	def_bool y if SPARSEMEM
@@ -1128,6 +1126,8 @@ source "drivers/firmware/Kconfig"
 source "fs/Kconfig"
 
 source "arch/arm64/kvm/Kconfig"
+
+source "arch/arm64/Kconfig.htc"
 
 source "arch/arm64/Kconfig.debug"
 

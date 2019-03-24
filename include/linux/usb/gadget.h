@@ -256,6 +256,9 @@ struct usb_ep_ops {
 struct usb_ep {
 	void			*driver_data;
 
+/*++ 2015/12/25, USB Team, PCN00051 ++*/
+	bool			is_ncm;
+/*-- 2015/12/25, USB Team, PCN00051 --*/
 	const char		*name;
 	const struct usb_ep_ops	*ops;
 	struct list_head	ep_list;
@@ -679,6 +682,9 @@ struct usb_gadget {
 	bool				remote_wakeup;
 	u32				xfer_isr_count;
 	u8				usb_core_id;
+/*++ 2015/12/25, USB Team, PCN00051 ++*/
+	int				miMaxMtu;
+/*-- 2015/12/25, USB Team, PCN00051 --*/
 	bool				l1_supported;
 	bool				bam2bam_func_enabled;
 	u32				extra_buf_alloc;
@@ -1342,5 +1348,15 @@ extern void usb_ep_autoconfig_reset(struct usb_gadget *);
 extern struct usb_ep *usb_ep_autoconfig_by_name(struct usb_gadget *,
 			struct usb_endpoint_descriptor *,
 			const char *ep_name);
+
+/*++ 2015/10/12, USB Team, PCN00021 ++*/
+enum {
+	PROPERTY_CHG_STATUS = 0,
+	PROPERTY_RESTART_USB,
+	PROPERTY_VBUS_STATUS,
+	PROPERTY_CURRENT_MAX,
+};
+/*-- 2015/10/12, USB Team, PCN00021 --*/
+
 
 #endif /* __LINUX_USB_GADGET_H */

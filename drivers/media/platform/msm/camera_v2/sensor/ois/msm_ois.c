@@ -24,7 +24,13 @@ DEFINE_MSM_MUTEX(msm_ois_mutex);
 #ifdef MSM_OIS_DEBUG
 #define CDBG(fmt, args...) pr_err(fmt, ##args)
 #else
+//HTC_START
+#if 1
+#define CDBG(fmt, args...) pr_info("[CAM][OIS]"fmt, ##args)
+#else
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#endif
+//HTC_END
 #endif
 
 static struct v4l2_file_operations msm_ois_v4l2_subdev_fops;
@@ -359,7 +365,13 @@ static int32_t msm_ois_control(struct msm_ois_ctrl_t *o_ctrl,
 		cci_client->retries = 3;
 		cci_client->id_map = 0;
 		cci_client->cci_i2c_master = o_ctrl->cci_master;
+		//HTC_START
+		#if 1
+		cci_client->i2c_freq_mode = I2C_FAST_MODE;
+		#else
 		cci_client->i2c_freq_mode = set_info->ois_params.i2c_freq_mode;
+		#endif
+		//HTC_END
 	} else {
 		o_ctrl->i2c_client.client->addr =
 			set_info->ois_params.i2c_addr;
@@ -410,8 +422,8 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 		(struct msm_ois_cfg_data *)argp;
 	int32_t rc = 0;
 	mutex_lock(o_ctrl->ois_mutex);
-	CDBG("Enter\n");
-	CDBG("%s type %d\n", __func__, cdata->cfgtype);
+//	CDBG("Enter\n");
+//	CDBG("%s type %d\n", __func__, cdata->cfgtype);
 	switch (cdata->cfgtype) {
 	case CFG_OIS_INIT:
 		rc = msm_ois_init(o_ctrl);
@@ -486,7 +498,7 @@ static int32_t msm_ois_config(struct msm_ois_ctrl_t *o_ctrl,
 		break;
 	}
 	mutex_unlock(o_ctrl->ois_mutex);
-	CDBG("Exit\n");
+//	CDBG("Exit\n");
 	return rc;
 }
 
@@ -601,8 +613,8 @@ static long msm_ois_subdev_ioctl(struct v4l2_subdev *sd,
 	int rc;
 	struct msm_ois_ctrl_t *o_ctrl = v4l2_get_subdevdata(sd);
 	void __user *argp = (void __user *)arg;
-	CDBG("Enter\n");
-	CDBG("%s:%d o_ctrl %pK argp %pK\n", __func__, __LINE__, o_ctrl, argp);
+//	CDBG("Enter\n");
+//	CDBG("%s:%d o_ctrl %pK argp %pK\n", __func__, __LINE__, o_ctrl, argp);
 	switch (cmd) {
 	case VIDIOC_MSM_SENSOR_GET_SUBDEV_ID:
 		return msm_ois_get_subdev_id(o_ctrl, argp);

@@ -380,6 +380,9 @@ static int msm_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 			ret = -EINVAL;
 			break;
 		}
+/* HTC_AUD_START: Klocwork */
+		if (buf && buf->data)
+/* HTC_AUD_END */
 		memset(buf->data, 0, buf->actual_size);
 		break;
 	case SNDRV_PCM_TRIGGER_SUSPEND:

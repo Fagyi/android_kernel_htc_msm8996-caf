@@ -35,6 +35,8 @@
 #include <linux/msm-sps.h>
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
 #include <linux/i2c/i2c-msm-v2.h>
 
 #ifdef DEBUG
@@ -43,6 +45,12 @@ static const enum msm_i2_debug_level DEFAULT_DBG_LVL = MSM_DBG;
 static const enum msm_i2_debug_level DEFAULT_DBG_LVL = MSM_ERR;
 #endif
 
+/*#define TEST_RECOVERY*/
+#define CONTROLLER_SIZE 12
+static int error_times[CONTROLLER_SIZE+1];
+static bool test_recovery[CONTROLLER_SIZE+1];
+static int xfer_times[CONTROLLER_SIZE+1];
+
 /* Forward declarations */
 static bool i2c_msm_xfer_next_buf(struct i2c_msm_ctrl *ctrl);
 static int i2c_msm_xfer_wait_for_completion(struct i2c_msm_ctrl *ctrl,
@@ -50,8 +58,7 @@ static int i2c_msm_xfer_wait_for_completion(struct i2c_msm_ctrl *ctrl,
 static int  i2c_msm_pm_resume(struct device *dev);
 static void i2c_msm_pm_suspend(struct device *dev);
 static void i2c_msm_clk_path_init(struct i2c_msm_ctrl *ctrl);
-static void i2c_msm_pm_pinctrl_state(struct i2c_msm_ctrl *ctrl,
-						bool runtime_active);
+static void i2c_msm_pm_pinctrl_state(struct i2c_msm_ctrl *ctrl, bool runtime_active);
 
 /* string table for enum i2c_msm_xfer_mode_id */
 const char * const i2c_msm_mode_str_tbl[] = {
@@ -107,13 +114,22 @@ static void i2c_msm_dbg_dump_diag(struct i2c_msm_ctrl *ctrl,
 		str = buf;
 	}
 
-	/* dump xfer details */
-	dev_err(ctrl->dev,
-		"%s: msgs(n:%d cur:%d %s) bc(rx:%zu tx:%zu) mode:%s slv_addr:0x%0x MSTR_STS:0x%08x OPER:0x%08x\n",
-		str, xfer->msg_cnt, xfer->cur_buf.msg_idx,
-		xfer->cur_buf.is_rx ? "rx" : "tx", xfer->rx_cnt, xfer->tx_cnt,
-		i2c_msm_mode_str_tbl[xfer->mode_id], xfer->msgs->addr,
-		status, qup_op);
+	if ((xfer->err == I2C_MSM_ERR_NACK) && (xfer->msgs->addr == ctrl->rsrcs.nack_as_normal)) {
+		/*dev_info(ctrl->dev,
+			"%s: msgs(n:%d cur:%d %s) bc(rx:%zu tx:%zu) mode:%s slv_addr:0x%0x MSTR_STS:0x%08x OPER:0x%08x\n",
+			str, xfer->msg_cnt, xfer->cur_buf.msg_idx,
+			xfer->cur_buf.is_rx ? "rx" : "tx", xfer->rx_cnt, xfer->tx_cnt,
+			i2c_msm_mode_str_tbl[xfer->mode_id], xfer->msgs->addr,
+			status, qup_op);*/
+	} else {
+		/* dump xfer details */
+		dev_err(ctrl->dev,
+			"%s: msgs(n:%d cur:%d %s) bc(rx:%zu tx:%zu) mode:%s slv_addr:0x%0x MSTR_STS:0x%08x OPER:0x%08x\n",
+			str, xfer->msg_cnt, xfer->cur_buf.msg_idx,
+			xfer->cur_buf.is_rx ? "rx" : "tx", xfer->rx_cnt, xfer->tx_cnt,
+			i2c_msm_mode_str_tbl[xfer->mode_id], xfer->msgs->addr,
+			status, qup_op);
+	}
 }
 
 static u32 i2c_msm_reg_io_modes_out_blk_sz(u32 qup_io_modes)
@@ -696,6 +712,9 @@ static int i2c_msm_fifo_xfer_process(struct i2c_msm_ctrl *ctrl)
 	/* read all from input fifo */
 	while (i2c_msm_xfer_next_buf(ctrl))
 		i2c_msm_fifo_read_xfer_buf(ctrl);
+
+	if ((ctrl->adapter.nr <= CONTROLLER_SIZE) && (ctrl->adapter.nr > 0))
+		error_times[ctrl->adapter.nr] = 0;
 
 	return 0;
 }
@@ -1973,6 +1992,112 @@ static int qup_i2c_recover_bus_busy(struct i2c_msm_ctrl *ctrl)
 
 	dev_info(ctrl->dev, "Bus recovery %s after %d retries\n",
 		(bus_clr || bus_active) ? "fail" : "success", retry);
+
+	if ((ctrl->adapter.nr <= 0) || (CONTROLLER_SIZE < ctrl->adapter.nr)) {
+		dev_err(ctrl->dev, "%s: Invalid adapter.nr = %d\n",
+			__func__, ctrl->adapter.nr);
+	}
+
+	status     = readl_relaxed(ctrl->rsrcs.base + QUP_I2C_STATUS);
+	if (!test_recovery[ctrl->adapter.nr] &&
+		(!(status & (I2C_STATUS_BUS_ACTIVE)) ||
+		(status & (I2C_STATUS_BUS_MASTER)))) {
+		dev_info(ctrl->dev, "%s: i2c_status = 0x%x, no need to "
+				    "perform GPIO recovery\n",
+				    __func__, status);
+		return 0;
+	}
+
+	if (ctrl->recover_clk_cnt) {
+		bool gpio_clk_status = false;
+		int i = 0;
+		struct pinctrl_state *pins_state;
+		const char           *pins_state_name;
+		int rc;
+
+		dev_info(ctrl->dev, "%s: GPIO recover start, recover_clk_cnt = "
+				    "%d\n", __func__, ctrl->recover_clk_cnt);
+
+		disable_irq(ctrl->rsrcs.irq);
+
+		pins_state      = ctrl->rsrcs.gpio_state_recovery;
+		pins_state_name = I2C_MSM_PINCTRL_RECOVERY;
+
+		if (!IS_ERR_OR_NULL(pins_state)) {
+			int ret = pinctrl_select_state(ctrl->rsrcs.pinctrl,
+						       pins_state);
+			if (ret) {
+				dev_err(ctrl->dev,
+				"error pinctrl_select_state(%s) err:%d\n",
+				pins_state_name, ret);
+				goto after_gpio_operation_2;
+			}
+		} else {
+			dev_err(ctrl->dev,
+				"error pinctrl state-name:'%s' is not "
+				"configured\n", pins_state_name);
+			goto after_gpio_operation_2;
+		}
+
+		rc = gpio_request(ctrl->scl_gpio, "gpio_i2c-recovery_scl");
+		if (rc) {
+			dev_err(ctrl->dev,
+				"%s: gpio_request %d failed, rc = %d\n",
+				__func__, ctrl->scl_gpio, rc);
+			goto after_gpio_operation_2;
+		}
+
+		rc = gpio_request(ctrl->sda_gpio, "gpio_i2c-recovery_sda");
+		if (rc) {
+			dev_err(ctrl->dev,
+				"%s: gpio_request %d failed, rc = %d\n",
+				__func__, ctrl->sda_gpio, rc);
+			goto after_gpio_operation_1;
+		}
+
+		for (i = 0; i < ctrl->recover_clk_cnt; i++) {
+			if (gpio_get_value(ctrl->sda_gpio) && gpio_clk_status)
+				break;
+			gpio_direction_output(ctrl->scl_gpio, 0);
+			udelay(5);
+			gpio_direction_output(ctrl->sda_gpio, 0);
+			udelay(5);
+			gpio_direction_input(ctrl->scl_gpio);
+			udelay(5);
+			if (!gpio_get_value(ctrl->scl_gpio))
+				udelay(20);
+			if (!gpio_get_value(ctrl->scl_gpio))
+				usleep_range(10000, 10000);
+			gpio_clk_status = gpio_get_value(ctrl->scl_gpio);
+			gpio_direction_input(ctrl->sda_gpio);
+			udelay(5);
+		}
+
+		gpio_free(ctrl->sda_gpio);
+after_gpio_operation_1:
+		gpio_free(ctrl->scl_gpio);
+after_gpio_operation_2:
+		/* Configure ALT funciton to QUP I2C*/
+		i2c_msm_pm_pinctrl_state(ctrl, true);
+
+		udelay(10);
+
+		enable_irq(ctrl->rsrcs.irq);
+
+		status = readl_relaxed(ctrl->rsrcs.base + QUP_I2C_STATUS);
+		if (!(status & I2C_STATUS_BUS_ACTIVE)) {
+			dev_info(ctrl->dev, "Bus busy cleared after %d clock "
+				 "cycles, status 0x%x\n", i, status);
+
+			goto recovery_end;
+		}
+		dev_warn(ctrl->dev, "Bus still busy, status %x\n", status);
+	}
+
+recovery_end:
+	if ((ctrl->adapter.nr < CONTROLLER_SIZE) && (ctrl->adapter.nr >= 0))
+		error_times[ctrl->adapter.nr]++;
+
 	return 0;
 }
 
@@ -2014,6 +2139,15 @@ static int i2c_msm_qup_post_xfer(struct i2c_msm_ctrl *ctrl, int err)
 	} else if (ctrl->xfer.err == I2C_MSM_ERR_NACK) {
 		err = -ENOTCONN;
 	}
+
+#ifdef TEST_RECOVERY
+	if ((ctrl->adapter.nr <= CONTROLLER_SIZE) && (ctrl->adapter.nr > 0) &&
+	    (xfer_times[ctrl->adapter.nr]++ == 100)) {
+		dev_err(ctrl->dev, "Test recovery on purpose, bus = %d\n", ctrl->adapter.nr);
+		test_recovery[ctrl->adapter.nr] = 1;
+		qup_i2c_recover_bus_busy(ctrl);
+	}
+#endif
 
 	return err;
 }
@@ -2085,6 +2219,10 @@ static int i2c_msm_xfer_wait_for_completion(struct i2c_msm_ctrl *ctrl,
 		}
 		i2c_msm_prof_evnt_add(ctrl, MSM_DBG, I2C_MSM_COMPLT_OK,
 					xfer->timeout, time_left, 0);
+		if (test_recovery[ctrl->adapter.nr]) {
+			qup_i2c_recover_bus_busy(ctrl);
+			test_recovery[ctrl->adapter.nr] = false;
+		}
 	}
 
 	return ret;
@@ -2407,6 +2545,7 @@ enum i2c_msm_dt_entry_type {
 	DT_U32,
 	DT_BOOL,
 	DT_ID,   /* of_alias_get_id() */
+	DT_GPIO,
 };
 
 struct i2c_msm_dt_to_pdata_map {
@@ -2423,6 +2562,7 @@ static int i2c_msm_dt_to_pdata_populate(struct i2c_msm_ctrl *ctrl,
 {
 	int  ret, err = 0;
 	struct device_node *node = pdev->dev.of_node;
+	uint32_t irq_gpio_flags;
 
 	for (; itr->dt_name ; ++itr) {
 		switch (itr->type) {
@@ -2442,6 +2582,14 @@ static int i2c_msm_dt_to_pdata_populate(struct i2c_msm_ctrl *ctrl,
 				ret = 0;
 			}
 			break;
+		case DT_GPIO:
+			ret = of_get_named_gpio_flags(node, itr->dt_name, 0,
+						      &irq_gpio_flags);
+			if (ret >= 0) {
+				*((int *) itr->ptr_data) = ret;
+				ret = 0;
+			}
+			break;
 		default:
 			dev_err(ctrl->dev,
 				"error %d is of unknown DT entry type\n",
@@ -2450,6 +2598,8 @@ static int i2c_msm_dt_to_pdata_populate(struct i2c_msm_ctrl *ctrl,
 		}
 
 		i2c_msm_dbg(ctrl, MSM_PROF, "DT entry ret:%d name:%s val:%d",
+				ret, itr->dt_name, *((int *)itr->ptr_data));
+		dev_info(ctrl->dev, "DT entry ret: %d, name: %s, val: %d\n",
 				ret, itr->dt_name, *((int *)itr->ptr_data));
 
 		if (ret) {
@@ -2498,6 +2648,14 @@ static int i2c_msm_rsrcs_process_dt(struct i2c_msm_ctrl *ctrl,
 	{"qcom,high-time-clk-div",	&ht_clk_div,
 							DT_OPT,  DT_U32,  0},
 	{"qcom,fs-clk-div",		&fs_clk_div,
+							DT_OPT,  DT_U32,  0},
+	{"qcom,nack-as-normal",		&(ctrl->rsrcs.nack_as_normal),
+							DT_OPT,  DT_U32,  0},
+	{"qcom,sda-gpio",		&(ctrl->sda_gpio),
+							DT_OPT,  DT_GPIO,  0},
+	{"qcom,scl-gpio",		&(ctrl->scl_gpio),
+							DT_OPT,  DT_GPIO,  0},
+	{"qcom,recover_clk_cnt",	&(ctrl->recover_clk_cnt),
 							DT_OPT,  DT_U32,  0},
 	{NULL,  NULL,					0,       0,       0},
 	};
@@ -2622,6 +2780,9 @@ static int i2c_msm_rsrcs_gpio_pinctrl_init(struct i2c_msm_ctrl *ctrl)
 
 	ctrl->rsrcs.gpio_state_suspend =
 		i2c_msm_rsrcs_gpio_get_state(ctrl, I2C_MSM_PINCTRL_SUSPEND);
+
+	ctrl->rsrcs.gpio_state_recovery =
+		i2c_msm_rsrcs_gpio_get_state(ctrl, I2C_MSM_PINCTRL_RECOVERY);
 
 	return 0;
 }
@@ -2890,7 +3051,7 @@ static int i2c_msm_probe(struct platform_device *pdev)
 	struct i2c_msm_ctrl *ctrl;
 	int ret = 0;
 
-	dev_info(&pdev->dev, "probing driver i2c-msm-v2\n");
+	dev_info(&pdev->dev, "probing driver i2c-msm-v2 [v02-GPIO recovery]\n");
 
 	ctrl = devm_kzalloc(&pdev->dev, sizeof(*ctrl), GFP_KERNEL);
 	if (!ctrl)
@@ -2961,6 +3122,13 @@ static int i2c_msm_probe(struct platform_device *pdev)
 	ret = i2c_msm_frmwrk_reg(pdev, ctrl);
 	if (ret)
 		goto reg_err;
+
+	if ((ctrl->adapter.nr <= CONTROLLER_SIZE) && (ctrl->adapter.nr > 0)) {
+		error_times[ctrl->adapter.nr] = 0;
+		test_recovery[ctrl->adapter.nr] = 0;
+		xfer_times[ctrl->adapter.nr] = 0;
+	}
+
 
 	i2c_msm_dbg(ctrl, MSM_PROF, "probe() completed with success");
 	return 0;

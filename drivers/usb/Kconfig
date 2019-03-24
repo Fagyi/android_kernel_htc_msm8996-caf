@@ -104,6 +104,12 @@ source "drivers/usb/dwc2/Kconfig"
 
 source "drivers/usb/chipidea/Kconfig"
 
+source "drivers/usb/anx7418/Kconfig"
+
+source "drivers/usb/anx7688/Kconfig"
+
+source "drivers/usb/cypd4225/Kconfig"
+
 comment "USB port drivers"
 
 if USB

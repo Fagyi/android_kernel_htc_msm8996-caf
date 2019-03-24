@@ -2,6 +2,7 @@
 # Makefile for misc devices that really don't fit anywhere else.
 #
 
+obj-$(CONFIG_VIB_TRIGGERS)	+= vib-triggers.o
 obj-$(CONFIG_IBM_ASM)		+= ibmasm/
 obj-$(CONFIG_AD525X_DPOT)	+= ad525x_dpot.o
 obj-$(CONFIG_AD525X_DPOT_I2C)	+= ad525x_dpot-i2c.o
@@ -50,6 +51,11 @@ obj-$(CONFIG_USB_SWITCH_FSA9480) += fsa9480.o
 obj-$(CONFIG_ALTERA_STAPL)	+=altera-stapl/
 obj-$(CONFIG_INTEL_MEI)		+= mei/
 obj-$(CONFIG_VMWARE_VMCI)	+= vmw_vmci/
+ifeq (OCEAN_NOTE,$(findstring OCEAN_NOTE,$(PRIVATE_RCMS_NAME)))
+obj-$(CONFIG_FPR_FPC)		+= fpr_FingerprintCard_OCN/
+else
+obj-$(CONFIG_FPR_FPC)		+= fpr_FingerprintCard/
+endif
 obj-$(CONFIG_LATTICE_ECP3_CONFIG)	+= lattice-ecp3-config.o
 obj-$(CONFIG_SRAM)		+= sram.o
 obj-y				+= mic/
@@ -65,6 +71,10 @@ obj-$(CONFIG_VEXPRESS_SYSCFG)	+= vexpress-syscfg.o
 obj-$(CONFIG_CXL_BASE)		+= cxl/
 obj-y				+= qcom/
 obj-$(CONFIG_TI_DRV2667) += ti_drv2667.o
+#HTC_AUD_START
+#obj-y				+= headset/
+obj-$(CONFIG_RT_REGMAP) += rt-regmap.o
+#HTC_AUD_END
 obj-$(CONFIG_USB_EXT_TYPE_C_PERICOM)	+= type-c-pericom.o
 obj-$(CONFIG_USB_EXT_TYPE_C_TI)		+= type-c-ti.o
 obj-$(CONFIG_QPNP_MISC) 	+= qpnp-misc.o
@@ -73,3 +83,6 @@ obj-$(CONFIG_MEMORY_STATE_TIME) += memory_state_time.o
 obj-$(CONFIG_APDS9930)		+= apds993x.o
 obj-$(CONFIG_UID_SYS_STATS) += uid_sys_stats.o
 obj-$(CONFIG_MEMORY_STATE_TIME) += memory_state_time.o
+
+obj-$(CONFIG_HTC_FLASHLIGHT) += htc_flashlight.o
+obj-$(CONFIG_HTC_MCUROUTE) += htc_mcuroute.o

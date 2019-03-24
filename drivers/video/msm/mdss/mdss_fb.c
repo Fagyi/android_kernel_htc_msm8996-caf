@@ -29,6 +29,7 @@
 #include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/memory.h>
+#include <linux/minifb.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -49,12 +50,15 @@
 #include <linux/kthread.h>
 #include <linux/dma-buf.h>
 #include "mdss_fb.h"
+#include "mdss_htc_util.h"
 #include "mdss_mdp_splash_logo.h"
 #define CREATE_TRACE_POINTS
 #include "mdss_debug.h"
 #include "mdss_smmu.h"
 #include "mdss_mdp.h"
+#ifdef TARGET_HW_MDSS_MDP3
 #include "mdp3_ctrl.h"
+#endif
 
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MDSS_FB_NUM 3
@@ -122,6 +126,9 @@ static int mdss_fb_send_panel_event(struct msm_fb_data_type *mfd,
 					int event, void *arg);
 static void mdss_fb_set_mdp_sync_pt_threshold(struct msm_fb_data_type *mfd,
 		int type);
+
+static void mdss_fb_set_subbacklight(struct msm_fb_data_type *mfd, u32 bkl_lvl);
+
 void mdss_fb_no_update_notify_timer_cb(unsigned long data)
 {
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)data;
@@ -273,6 +280,65 @@ static int mdss_fb_notify_update(struct msm_fb_data_type *mfd,
 	return ret;
 }
 
+/**
+ * Backlight 1.0.
+ * mdss_backlight_trans() -  Transfer BL level and Brightness level.
+ * Ref htc,brt-bl-table to map BL level and Brightness level.
+ * brightness_to_bl = true, The val was brigthness and return bl level.
+ * brightness_to_bl = false, The val was bl and return brightness level.
+ */
+int mdss_backlight_trans(int val, struct htc_backlight1_table *table, int brightness_to_bl)
+{
+	unsigned int result;
+	int index = 0, size = 0;
+	u16 *val_table;
+	u16 *ret_table;
+
+	/* Not define brt table */
+	if(!table || !table->size || !table->brt_data || !table->bl_data)
+		return -ENOENT;
+
+	size = table->size;
+	if (brightness_to_bl) {
+		val_table = table->brt_data;
+		ret_table = table->bl_data;
+	} else {
+		val_table = table->bl_data;
+		ret_table = table->brt_data;
+	}
+
+	if (val <= 0){
+		result = 0;
+	} else if (val < val_table[0]) {
+		/* Min value */
+		result = ret_table[0];
+	} else if (val >= val_table[size - 1]) {
+		/* Max value */
+		result = ret_table[size - 1];
+	} else {
+		/* Interpolation method */
+		result = val;
+		for(index = 0; index < size - 1; index++){
+			if (val >= val_table[index] && val <= val_table[index + 1]) {
+				int x0 = val_table[index];
+				int y0 = ret_table[index];
+				int x1 = val_table[index + 1];
+				int y1 = ret_table[index + 1];
+
+				if (x0 == x1)
+					result = y0;
+				else
+					result = y0 + (y1 - y0) * (val - x0) / (x1 - x0);
+
+				break;
+			}
+		}
+	}
+
+	pr_info("mode=%d, apply_cali=%d, %d => %d\n", brightness_to_bl, table->apply_cali, val, result);
+	return result;
+}
+
 static int lcd_backlight_registered;
 
 static void mdss_fb_set_bl_brightness(struct led_classdev *led_cdev,
@@ -289,13 +355,25 @@ static void mdss_fb_set_bl_brightness(struct led_classdev *led_cdev,
 	if (value > mfd->panel_info->brightness_max)
 		value = mfd->panel_info->brightness_max;
 
-	/* This maps android backlight level 0 to 255 into
-	   driver backlight level 0 to bl_max with rounding */
-	MDSS_BRIGHT_TO_BL(bl_lvl, value, mfd->panel_info->bl_max,
-				mfd->panel_info->brightness_max);
+	bl_lvl = mdss_backlight_trans(value, &mfd->panel_info->brt_bl_table[0], true);
+
+	/* Change to burst backlight */
+	if (htc_is_burst_bl_on(mfd, value)) {
+		bl_lvl = mfd->panel_info->burst_bl_value;
+		pr_info("Change to burst bl =%d\n", bl_lvl);
+	}
+
+	if (bl_lvl < 0) {
+		/* This maps android backlight level 0 to 255 into
+		   driver backlight level 0 to bl_max with rounding */
+		MDSS_BRIGHT_TO_BL(bl_lvl, value, mfd->panel_info->bl_max,
+					mfd->panel_info->brightness_max);
+	}
 
 	if (!bl_lvl && value)
 		bl_lvl = 1;
+
+	mfd->last_bri1 = value;  /* Keep for calibration */
 
 	if (!IS_CALIB_MODE_BL(mfd) && (!mfd->ext_bl_ctrl || !value ||
 							!mfd->bl_level)) {
@@ -305,10 +383,86 @@ static void mdss_fb_set_bl_brightness(struct led_classdev *led_cdev,
 	}
 }
 
+static void mdss_fb_set_bl_brightness_hybrid(struct led_classdev *led_cdev,
+				      enum led_brightness value)
+{
+	struct msm_fb_data_type *mfd = dev_get_drvdata(led_cdev->dev->parent);
+	int bl_lvl, sub_bl_lvl;
+	bool sub_only = false;
+
+	if (mfd->boot_notification_led) {
+		led_trigger_event(mfd->boot_notification_led, 0);
+		mfd->boot_notification_led = NULL;
+	}
+
+	if (value > mfd->panel_info->brightness_max)
+		value = mfd->panel_info->brightness_max;
+
+	sub_only = !strcmp(led_cdev->name, "sub-backlight");
+
+	if (!sub_only) {
+		bl_lvl = mdss_backlight_trans(value, &mfd->panel_info->brt_bl_table[0], true);
+
+		/* Change to burst backlight, only for main */
+		if (htc_is_burst_bl_on(mfd, value)) {
+			bl_lvl = mfd->panel_info->burst_bl_value;
+			pr_info("Change to burst bl =%d\n", bl_lvl);
+		}
+
+		if (bl_lvl < 0) {
+			/* This maps android backlight level 0 to 255 into
+			   driver backlight level 0 to bl_max with rounding */
+			MDSS_BRIGHT_TO_BL(bl_lvl, value, mfd->panel_info->bl_max,
+						mfd->panel_info->brightness_max);
+		}
+		if (!bl_lvl && value)
+			bl_lvl = 1;
+
+		mfd->bl2_min = (bl_lvl * 32 + 86) / 87; /* Magic! */
+
+		if (mfd->bl_sync) {
+			sub_bl_lvl = mdss_backlight_trans(value, &mfd->panel_info->brt_bl_table[1], true);
+			if (sub_bl_lvl < 0)
+				sub_bl_lvl = 0;
+		} else {
+			sub_bl_lvl = mfd->bl2_level;
+		}
+
+		mfd->last_bri1 = value;  /* Keep for calibration */
+	} else {
+		sub_bl_lvl = mdss_backlight_trans(value, &mfd->panel_info->brt_bl_table[1], true);
+		if (sub_bl_lvl < 0)
+			sub_bl_lvl = 0;
+	}
+
+	if (!IS_CALIB_MODE_BL(mfd) && (!mfd->ext_bl_ctrl || !value ||
+							!mfd->bl_level)) {
+		mutex_lock(&mfd->bl_lock);
+		if (!sub_only)
+			mdss_fb_set_backlight(mfd, bl_lvl);
+		mdss_fb_set_subbacklight(mfd, sub_bl_lvl);
+		mutex_unlock(&mfd->bl_lock);
+	}
+}
+
 static struct led_classdev backlight_led = {
 	.name           = "lcd-backlight",
 	.brightness     = MDSS_MAX_BL_BRIGHTNESS / 2,
 	.brightness_set = mdss_fb_set_bl_brightness,
+	.max_brightness = MDSS_MAX_BL_BRIGHTNESS,
+};
+
+static struct led_classdev backlight_hybrid = {
+	.name           = "lcd-backlight",
+	.brightness     = MDSS_MAX_BL_BRIGHTNESS / 2,
+	.brightness_set = mdss_fb_set_bl_brightness_hybrid,
+	.max_brightness = MDSS_MAX_BL_BRIGHTNESS,
+};
+
+static struct led_classdev sub_backlight_led = {
+	.name           = "sub-backlight",
+	.brightness     = 0,
+	.brightness_set = mdss_fb_set_bl_brightness_hybrid,
 	.max_brightness = MDSS_MAX_BL_BRIGHTNESS,
 };
 
@@ -581,6 +735,21 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 	struct msm_fb_data_type *mfd = fbi->par;
 	struct mdss_panel_info *pinfo = mfd->panel_info;
 	int ret;
+	char buffer[256] = {0};
+	char color_profile_caps[256] = {0};
+
+	if (pinfo->aod.supported) {
+		snprintf(buffer, sizeof(buffer),
+			"aod_support=1\naod_xstart=%d\n"
+			"aod_ystart=%d\naod_width=%d\n"
+			"aod_height=%d\n",
+			pinfo->aod.xstart,
+			pinfo->aod.ystart,
+			pinfo->aod.width,
+			pinfo->aod.height);
+	}
+	if (pinfo->panel_color_profile & BIT(PANEL_COLOR_PROFILE_SRGB))
+		snprintf(color_profile_caps, sizeof(color_profile_caps), "native,srgb");
 
 	ret = scnprintf(buf, PAGE_SIZE,
 			"pu_en=%d\nxstart=%d\nwalign=%d\nystart=%d\nhalign=%d\n"
@@ -593,7 +762,9 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 			"white_chromaticity_x=%d\nwhite_chromaticity_y=%d\n"
 			"red_chromaticity_x=%d\nred_chromaticity_y=%d\n"
 			"green_chromaticity_x=%d\ngreen_chromaticity_y=%d\n"
-			"blue_chromaticity_x=%d\nblue_chromaticity_y=%d\n",
+			"blue_chromaticity_x=%d\nblue_chromaticity_y=%d\n"
+			"color_profile=%s\n"
+			"%s",
 			pinfo->partial_update_enabled,
 			pinfo->roi_alignment.xstart_pix_align,
 			pinfo->roi_alignment.width_pix_align,
@@ -616,7 +787,9 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 			pinfo->hdr_properties.display_primaries[4],
 			pinfo->hdr_properties.display_primaries[5],
 			pinfo->hdr_properties.display_primaries[6],
-			pinfo->hdr_properties.display_primaries[7]);
+			pinfo->hdr_properties.display_primaries[7],
+			color_profile_caps,
+			buffer);
 
 	return ret;
 }
@@ -933,12 +1106,15 @@ static int mdss_fb_create_sysfs(struct msm_fb_data_type *mfd)
 	rc = sysfs_create_group(&mfd->fbi->dev->kobj, &mdss_fb_attr_group);
 	if (rc)
 		pr_err("sysfs group creation failed, rc=%d\n", rc);
+	else
+		rc = htc_mdss_fb_create_sysfs(mfd);
 	return rc;
 }
 
 static void mdss_fb_remove_sysfs(struct msm_fb_data_type *mfd)
 {
 	sysfs_remove_group(&mfd->fbi->dev->kobj, &mdss_fb_attr_group);
+	htc_mdss_fb_remove_sysfs(mfd);
 }
 
 static void mdss_fb_shutdown(struct platform_device *pdev)
@@ -1214,6 +1390,11 @@ static int mdss_fb_probe(struct platform_device *pdev)
 	if (!pdata)
 		return -EPROBE_DEFER;
 
+	if (fbi_list_index == 0 && !pdata->allow_primary_fb) {
+		pr_warn("%s is not primary fb. Waiting for primary fb device\n", pdev->name);
+		return -EPROBE_DEFER;
+	}
+
 	if (!mdp_instance) {
 		pr_err("mdss mdp resource not initialized yet\n");
 		return -ENODEV;
@@ -1251,6 +1432,7 @@ static int mdss_fb_probe(struct platform_device *pdev)
 	mfd->fb_imgType = MDP_RGBA_8888;
 	mfd->calib_mode_bl = 0;
 	mfd->unset_bl_level = U32_MAX;
+	mfd->unset_bl2_level = U32_MAX;
 
 	mfd->pdev = pdev;
 
@@ -1316,14 +1498,35 @@ static int mdss_fb_probe(struct platform_device *pdev)
 		pr_err("pm_runtime: fail to set active.\n");
 	pm_runtime_enable(mfd->fbi->dev);
 
-	/* android supports only one lcd-backlight/lcd for now */
 	if (!lcd_backlight_registered) {
-		backlight_led.brightness = mfd->panel_info->brightness_max;
-		backlight_led.max_brightness = mfd->panel_info->brightness_max;
-		if (led_classdev_register(&pdev->dev, &backlight_led))
-			pr_err("led_classdev_register failed\n");
-		else
-			lcd_backlight_registered = 1;
+		if (mfd->panel_info->aod.supported) {
+			backlight_hybrid.brightness = mfd->panel_info->brightness_max;
+			backlight_hybrid.max_brightness = mfd->panel_info->brightness_max;
+			if (led_classdev_register(&pdev->dev, &backlight_hybrid))
+				pr_err("led_classdev_register failed\n");
+			else {
+				lcd_backlight_registered = 1;
+				if (led_classdev_register(&pdev->dev, &sub_backlight_led)) {
+					pr_err("led_classdev_register failed for sub-backlight\n");
+				} else {
+					lcd_backlight_registered |= BIT(1);
+					htc_register_sub_attrs(&sub_backlight_led.dev->kobj);
+				}
+
+				/* HTC: extend attrs */
+				htc_register_attrs(&backlight_hybrid.dev->kobj, mfd);
+			}
+		} else {
+			backlight_led.brightness = mfd->panel_info->brightness_max;
+			backlight_led.max_brightness = mfd->panel_info->brightness_max;
+			if (led_classdev_register(&pdev->dev, &backlight_led))
+				pr_err("led_classdev_register failed\n");
+			else
+				lcd_backlight_registered = 1;
+
+			/* HTC: extend attrs */
+			htc_register_attrs(&backlight_led.dev->kobj, mfd);
+		}
 	}
 
 	mdss_fb_init_panel_modes(mfd, pdata);
@@ -1418,8 +1621,16 @@ static int mdss_fb_remove(struct platform_device *pdev)
 	unregister_framebuffer(mfd->fbi);
 
 	if (lcd_backlight_registered) {
+		if (mfd->panel_info->aod.supported) {
+			led_classdev_unregister(&backlight_hybrid);
+			if (lcd_backlight_registered & BIT(1)) {
+				htc_unregister_sub_attrs(&sub_backlight_led.dev->kobj);
+				led_classdev_unregister(&sub_backlight_led);
+			}
+		} else {
+			led_classdev_unregister(&backlight_led);
+		}
 		lcd_backlight_registered = 0;
-		led_classdev_unregister(&backlight_led);
 	}
 
 	return 0;
@@ -1675,6 +1886,7 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 		|| !mfd->allow_bl_update) && !IS_CALIB_MODE_BL(mfd)) ||
 		mfd->panel_info->cont_splash_enabled) {
 		mfd->unset_bl_level = bkl_lvl;
+		pr_info("defer backlight value %d\n", bkl_lvl);
 		return;
 	} else if (mdss_fb_is_power_on(mfd) && mfd->panel_info->panel_dead) {
 		mfd->unset_bl_level = mfd->bl_level;
@@ -1704,17 +1916,20 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 			if (mfd->bl_level != bkl_lvl)
 				bl_notify_needed = true;
 			pr_debug("backlight sent to panel :%d\n", temp);
+
 			if (mfd->mdp.is_twm_en)
 				twm_en = mfd->mdp.is_twm_en();
 
 			if (twm_en) {
 				pr_info("TWM Enabled skip backlight update\n");
 			} else {
-				pdata->set_backlight(pdata, temp);
+				pdata->set_backlight(pdata, 0, temp);
 				mfd->bl_level = bkl_lvl;
 				mfd->bl_level_scaled = temp;
 			}
 		}
+		/* HTC: set burst mode */
+		htc_set_burst(mfd);
 		if (ad_bl_notify_needed)
 			mdss_fb_bl_update_notify(mfd,
 				NOTIFY_TYPE_BL_AD_ATTEN_UPDATE);
@@ -1724,29 +1939,89 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 	}
 }
 
+/* must call this function from within mfd->bl_lock */
+/* HTC: Current sub-backlight didn't consider Assertive Display support */
+static void mdss_fb_set_subbacklight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
+{
+	struct mdss_panel_data *pdata;
+	u32 temp = bkl_lvl;
+
+	if ((((mdss_fb_is_power_off(mfd) && mfd->dcm_state != DCM_ENTER)
+		|| !mfd->allow_bl_update) && !IS_CALIB_MODE_BL(mfd)) ||
+		mfd->panel_info->cont_splash_enabled) {
+		mfd->unset_bl2_level = bkl_lvl;
+		pr_info("defer backlight value %d\n", bkl_lvl);
+		return;
+	} else if (mdss_fb_is_power_on(mfd) && mfd->panel_info->panel_dead) {
+		mfd->unset_bl2_level = mfd->bl2_level;
+	} else {
+		mfd->unset_bl2_level = U32_MAX;
+	}
+
+	pdata = dev_get_platdata(&mfd->pdev->dev);
+
+	if ((pdata) && (pdata->set_backlight)) {
+		if (!IS_CALIB_MODE_BL(mfd))
+			mdss_fb_scale_bl(mfd, &temp);
+		/*
+		 * Even though backlight has been scaled, want to show that
+		 * backlight has been set to bkl_lvl to those that read from
+		 * sysfs node. Thus, need to set bl_level even if it appears
+		 * the backlight has already been set to the level it is at,
+		 * as well as setting bl_level to bkl_lvl even though the
+		 * backlight has been set to the scaled value.
+		 */
+		if (mfd->bl2_level_scaled == temp && (temp > mfd->bl2_min)) {
+			mfd->bl2_level = bkl_lvl;
+		} else {
+			pr_debug("sub-backlight sent to panel :%d\n", temp);
+			pdata->set_backlight(pdata, 1, max(temp, mfd->bl2_min));
+			mfd->bl2_level = bkl_lvl;
+			mfd->bl2_level_scaled = temp;
+		}
+	}
+
+	return;
+}
+
 void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 {
 	struct mdss_panel_data *pdata;
 	u32 temp;
 	bool bl_notify = false;
 
-	if (mfd->unset_bl_level == U32_MAX)
+	if ((mfd->unset_bl_level == U32_MAX) && (mfd->unset_bl2_level == U32_MAX))
 		return;
 	mutex_lock(&mfd->bl_lock);
 	if (!mfd->allow_bl_update) {
 		pdata = dev_get_platdata(&mfd->pdev->dev);
 		if ((pdata) && (pdata->set_backlight)) {
-			mfd->bl_level = mfd->unset_bl_level;
-			temp = mfd->bl_level;
-			if (mfd->mdp.ad_calc_bl)
-				(*mfd->mdp.ad_calc_bl)(mfd, temp, &temp,
-								&bl_notify);
-			if (bl_notify)
-				mdss_fb_bl_update_notify(mfd,
-					NOTIFY_TYPE_BL_AD_ATTEN_UPDATE);
-			mdss_fb_bl_update_notify(mfd, NOTIFY_TYPE_BL_UPDATE);
-			pdata->set_backlight(pdata, temp);
-			mfd->bl_level_scaled = mfd->unset_bl_level;
+			pr_info("bl_level %d => %d / %d => %d\n",
+				mfd->bl_level, mfd->unset_bl_level,
+				mfd->bl2_level, mfd->unset_bl2_level);
+			/* HTC TODO: turn on backlight right after kickoff may not guarantee
+			       internal gram was initialized. Defer 1 frame time before enable.
+			 */
+			udelay(16666);
+			if (mfd->unset_bl_level != U32_MAX) {
+				mfd->bl_level = mfd->unset_bl_level;
+				temp = mfd->bl_level;
+				if (mfd->mdp.ad_calc_bl)
+					(*mfd->mdp.ad_calc_bl)(mfd, temp, &temp,
+									&bl_notify);
+				if (bl_notify)
+					mdss_fb_bl_update_notify(mfd,
+						NOTIFY_TYPE_BL_AD_ATTEN_UPDATE);
+				mdss_fb_bl_update_notify(mfd, NOTIFY_TYPE_BL_UPDATE);
+				pdata->set_backlight(pdata, 0, temp);
+				mfd->bl_level_scaled = mfd->unset_bl_level;
+			}
+			if (mfd->panel_info->aod.supported && (mfd->unset_bl2_level != U32_MAX)) {
+				mfd->bl2_level = mfd->unset_bl2_level;
+				pdata->set_backlight(pdata, 1, max(mfd->bl2_level, mfd->bl2_min));
+				mfd->bl2_level_scaled = mfd->unset_bl2_level;
+			}
+
 			mfd->allow_bl_update = true;
 		}
 	}
@@ -1854,6 +2129,8 @@ static int mdss_fb_blank_blank(struct msm_fb_data_type *mfd,
 		current_bl = mfd->bl_level;
 		mfd->allow_bl_update = true;
 		mdss_fb_set_backlight(mfd, 0);
+		if (mfd->panel_info->aod.supported && mfd->panel_info->aod.next_state != FB_AOD_PARTIAL_ON)
+			mdss_fb_set_subbacklight(mfd, 0);
 		mfd->allow_bl_update = false;
 		mfd->unset_bl_level = current_bl;
 		mutex_unlock(&mfd->bl_lock);
@@ -1930,6 +2207,11 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 
 	/* Reset the backlight only if the panel was off */
 	if (mdss_panel_is_power_off(cur_power_state)) {
+		if (!mfd->panel_info->cont_splash_enabled && mfd->panel_info->pdest == DISPLAY_1) {
+			htc_set_color_temp(mfd, 1);
+			htc_set_color_profile(mfd, 1);
+		}
+
 		mutex_lock(&mfd->bl_lock);
 		if (!mfd->allow_bl_update) {
 			mfd->allow_bl_update = true;
@@ -1944,6 +2226,12 @@ static int mdss_fb_blank_unblank(struct msm_fb_data_type *mfd)
 			else if ((!mfd->panel_info->mipi.post_init_delay) &&
 				(mfd->unset_bl_level != U32_MAX))
 				mdss_fb_set_backlight(mfd, mfd->unset_bl_level);
+			if (mfd->panel_info->aod.supported) {
+				if (mfd->panel_info->aod.next_state == FB_AOD_FULL_ON)
+					mdss_fb_set_subbacklight(mfd, 0);
+				else if (mfd->panel_info->aod.next_state == FB_AOD_PARTIAL_ON)
+					mdss_fb_set_subbacklight(mfd, 500);
+			}
 
 			/*
 			 * it blocks the backlight update between unblank and
@@ -1966,6 +2254,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	int ret = 0;
 	int cur_power_state, req_power_state = MDSS_PANEL_POWER_OFF;
 	char trace_buffer[32];
+	struct aod_panel_info *aod;
 
 	if (!mfd || !op_enable)
 		return -EPERM;
@@ -1995,7 +2284,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 			return 0;
 	}
 
-	if (mfd->panel_info->type != MIPI_CMD_PANEL) {
+	if (mfd->panel_info->type != MIPI_CMD_PANEL || mfd->panel_info->sim_panel_mode) {
 		if (BLANK_FLAG_LP == blank_mode) {
 			pr_debug("lp mode only valid for cmd mode panels\n");
 			if (mdss_fb_is_power_on_interactive(mfd))
@@ -2011,6 +2300,51 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 		}
 	}
 
+	aod = &mfd->panel_info->aod;;
+	if (aod->supported) {
+		mutex_lock(&mfd->aod_lock);
+
+		if (blank_mode == FB_BLANK_UNBLANK) {
+			int mode;
+			switch (aod->req_state) {
+			case FB_AOD_PARTIAL_ON:
+				aod->next_state = FB_AOD_PARTIAL_ON;
+				mode = DSI_CMD_MODE;
+				break;
+			default:
+				aod->next_state = FB_AOD_FULL_ON;
+				mode = mfd->panel_info->mipi.boot_mode;
+				break;
+			}
+			if (mode != mfd->panel_info->mipi.mode) {
+				mfd->mdp.configure_panel(mfd, mode, 1);
+				mdss_fb_set_mdp_sync_pt_threshold(mfd, mfd->panel.type); // TBD
+				aod->mode_changed = true;
+			}
+		} else if (blank_mode == FB_BLANK_POWERDOWN) {
+			switch (aod->req_state) {
+			case FB_AOD_PARTIAL_ON:
+				aod->next_state = FB_AOD_PARTIAL_ON;
+				break;
+			case FB_AOD_IDLE:
+				aod->next_state = FB_AOD_IDLE;
+				break;
+			default:
+				aod->next_state = FB_AOD_PREPARE_OFF;
+				break;
+			}
+		} else {
+			pr_err("Unsupport blank operation %d for AOD panel\n", blank_mode);
+		}
+		if (aod->next_state == FB_AOD_PREPARE_OFF) {
+			aod_send_notify(info);
+			aod->next_state = FB_AOD_OFF;
+		}
+
+		mutex_unlock(&mfd->aod_lock);
+	}
+
+	mutex_lock(&mfd->aod_lock);
 	switch (blank_mode) {
 	case FB_BLANK_UNBLANK:
 		pr_debug("unblank called. cur pwr state=%d\n", cur_power_state);
@@ -2021,6 +2355,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 		pr_debug("ultra low power mode requested\n");
 		if (mdss_fb_is_power_off(mfd)) {
 			pr_debug("Unsupp transition: off --> ulp\n");
+			mutex_unlock(&mfd->aod_lock);
 			return 0;
 		}
 
@@ -2051,9 +2386,12 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 		ret = mdss_fb_blank_blank(mfd, req_power_state);
 		break;
 	}
+	aod_send_notify(info);
+	mutex_unlock(&mfd->aod_lock);
 
 	/* Notify listeners */
 	sysfs_notify(&mfd->fbi->dev->kobj, NULL, "show_blank_event");
+
 
 	ATRACE_END(trace_buffer);
 
@@ -2663,6 +3001,13 @@ static int mdss_fb_register(struct msm_fb_data_type *mfd)
 	var->yres_virtual = panel_info->yres * mfd->fb_page;
 	var->bits_per_pixel = bpp * 8;	/* FrameBuffer color depth */
 
+	/* HTC: register camera brightness */
+	if (panel_info->camera_blk) {
+		htc_register_camera_bkl(panel_info->camera_blk);
+	}
+	if (panel_info->aod.supported)
+		fix->capabilities |= FB_CAP_VENDOR;
+
 	/*
 	 * Populate smem length here for uspace to get the
 	 * Framebuffer size when FBIO_FSCREENINFO ioctl is called.
@@ -2690,6 +3035,7 @@ static int mdss_fb_register(struct msm_fb_data_type *mfd)
 	mutex_init(&mfd->update.lock);
 	mutex_init(&mfd->no_update.lock);
 	mutex_init(&mfd->mdp_sync_pt_data.sync_mutex);
+	mutex_init(&mfd->aod_lock);
 	atomic_set(&mfd->mdp_sync_pt_data.commit_cnt, 0);
 	atomic_set(&mfd->commits_pending, 0);
 	atomic_set(&mfd->ioctl_ref_cnt, 0);
@@ -2836,11 +3182,18 @@ static int mdss_fb_release_all(struct fb_info *info, bool release_all)
 		pr_warn("file node not found or wrong ref cnt: release all:%d refcnt:%d\n",
 			release_all, mfd->ref_cnt);
 
-	pr_debug("current process=%s pid=%d mfd->ref=%d file:%pK\n",
-		task->comm, current->tgid, mfd->ref_cnt, info->file);
+	pr_info("current process=%s pid=%d mfd->ref=%d file:%pK, cont_splash=%d\n",
+		task->comm, current->tgid, mfd->ref_cnt, info->file, mfd->panel_info->cont_splash_enabled);
 
-	if (!mfd->ref_cnt || release_all) {
+	if ((!mfd->ref_cnt && !mfd->panel_info->cont_splash_enabled) || release_all) {
 		/* resources (if any) will be released during blank */
+		if (mfd->panel_info->aod.supported)
+		if (mfd->panel_info->aod.supported) {
+			mfd->panel_info->aod.req_state = FB_AOD_OFF;
+			if (!mdss_fb_is_power_on(mfd) && mdss_fb_is_power_on_standby(mfd))
+				mdss_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable);
+		}
+
 		if (mfd->mdp.release_fnc)
 			mfd->mdp.release_fnc(mfd, NULL);
 
@@ -3443,6 +3796,7 @@ int mdss_fb_atomic_commit(struct fb_info *info,
 	atomic_inc(&mfd->mdp_sync_pt_data.commit_cnt);
 	atomic_inc(&mfd->commits_pending);
 	atomic_inc(&mfd->kickoff_pending);
+	MDSS_XLOG(mfd->index, atomic_read(&mfd->commits_pending), atomic_read(&mfd->kickoff_pending));
 	wake_up_all(&mfd->commit_wait_q);
 	mutex_unlock(&mfd->mdp_sync_pt_data.sync_mutex);
 
@@ -3676,8 +4030,15 @@ static int __mdss_fb_perform_commit(struct msm_fb_data_type *mfd)
 	}
 
 skip_commit:
-	if (!ret)
+	if (!ret) {
+		if (mfd->panel_info->pdest == DISPLAY_1) {
+			htc_set_cabc(mfd, 0);	/* HTC: set cabc mode start */
+			htc_set_color_temp(mfd, 0);
+			htc_set_color_profile(mfd, 0);
+			htc_update_bl_cali_data(mfd);  		/* HTC: set brightness calibration value */
+		}
 		mdss_fb_update_backlight(mfd);
+	}
 
 	if (IS_ERR_VALUE(ret) || !sync_pt_data->flushed) {
 		mdss_fb_release_kickoff(mfd);
@@ -3727,7 +4088,7 @@ static int __mdss_fb_display_thread(void *data)
 		if (kthread_should_stop())
 			break;
 
-		MDSS_XLOG(mfd->index, XLOG_FUNC_ENTRY);
+		MDSS_XLOG(mfd->index, XLOG_FUNC_ENTRY, atomic_read(&mfd->commits_pending));
 		ret = __mdss_fb_perform_commit(mfd);
 		MDSS_XLOG(mfd->index, XLOG_FUNC_EXIT);
 
@@ -4905,6 +5266,21 @@ int mdss_fb_do_ioctl(struct fb_info *info, unsigned int cmd,
 		ret = mdss_fb_async_position_update_ioctl(info, argp);
 		break;
 
+	/* HTC: We wish to implement dedicated usb fb device in future.
+	 *      However, keep things simple now. */
+	case MSMFB_USBFB_INIT:
+		ret = minifb_ioctl_handler(MINIFB_INIT, argp);
+		break;
+	case MSMFB_USBFB_TERMINATE:
+		ret = minifb_ioctl_handler(MINIFB_TERMINATE, argp);
+		break;
+	case MSMFB_USBFB_QUEUE_BUFFER:
+		ret = minifb_ioctl_handler(MINIFB_QUEUE_BUFFER, argp);
+		break;
+	case MSMFB_USBFB_DEQUEUE_BUFFER:
+		ret = minifb_ioctl_handler(MINIFB_DEQUEUE_BUFFER, argp);
+		break;
+
 	default:
 		if (mfd->mdp.ioctl_handler)
 			ret = mfd->mdp.ioctl_handler(mfd, cmd, argp);
@@ -4957,7 +5333,7 @@ int mdss_register_panel(struct platform_device *pdev,
 	struct mdss_panel_data *pdata)
 {
 	struct platform_device *fb_pdev, *mdss_pdev;
-	struct device_node *node = NULL;
+	struct device_node *node = NULL, *node_primfb = NULL;
 	int rc = 0;
 	bool master_panel = true;
 
@@ -4983,6 +5359,18 @@ int mdss_register_panel(struct platform_device *pdev,
 			return -ENODEV;
 		}
 	}
+
+	node_primfb = of_parse_phandle(node->parent, "htc,assigned-primary-fb", 0);
+	if (node_primfb) {
+		pr_info("found primfb (%s)\n", node_primfb->name);
+		pdata->allow_primary_fb = (node_primfb == node);
+
+		of_node_put(node_primfb);
+		node_primfb = NULL;
+	} else {
+		pdata->allow_primary_fb = true;
+	}
+
 	mdss_pdev = of_find_device_by_node(node->parent);
 	if (!mdss_pdev) {
 		pr_err("Unable to find mdss for node: %s\n", node->full_name);

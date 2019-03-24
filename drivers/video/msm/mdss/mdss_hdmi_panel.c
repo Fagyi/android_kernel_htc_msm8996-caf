@@ -822,7 +822,7 @@ static int hdmi_panel_power_on(void *input)
 	if (panel->vic != panel->data->vic) {
 		res_changed = true;
 
-		pr_debug("switching from %d => %d\n",
+		pr_info("switching from %d => %d\n",
 			panel->vic, panel->data->vic);
 
 		panel->vic = panel->data->vic;
@@ -870,7 +870,7 @@ end:
 	panel->on = true;
 
 	info = panel->vid_cfg.timing;
-	pr_debug("%dx%d%s@%dHz %dMHz %s (%d)\n",
+	pr_info("%dx%d%s@%dHz %dMHz %s (%d)\n",
 		info->active_h, info->active_v,
 		info->interlaced ? "i" : "p",
 		info->refresh_rate / 1000,

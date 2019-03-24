@@ -536,6 +536,9 @@ Fudge Factors:			Fudge factors are used to boost demand for
 			        Few Low tier targets expect min vote on the bus during SMMU
 			        and TZ operations. use this handle to request the vote needed.
 
+- htc,assigned-primary-fb:	Optional Property to hint which mdss_fb assoicated panel
+				will be used for fb0 device registration.
+
 Optional subnodes:
 - mdss_fb:		Child nodes representing the frame buffer virtual devices.
 

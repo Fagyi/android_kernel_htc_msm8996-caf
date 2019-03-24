@@ -137,6 +137,7 @@ Optional properties:
 					- "tertiary"
 - qcom,bridge-index:			Instance id of the bridge chip connected to DSI. qcom,bridge-index is
 					required if a bridge chip panel is used.
+- htc,platform-ext-reset-gpio:		Specifies the panel an extra reset gpio.
 
 Example:
 	mdss_dsi: qcom,mdss_dsi@0 {

@@ -326,14 +326,14 @@ int clk_prepare(struct clk *clk)
 	mutex_lock(&clk->prepare_lock);
 	if (clk->prepare_count == 0) {
 		parent = clk->parent;
-
+		if (!(clk->flags & CLKFLAG_IGNORE)) {
 		ret = clk_prepare(parent);
 		if (ret)
 			goto out;
 		ret = clk_prepare(clk->depends);
 		if (ret)
 			goto err_prepare_depends;
-
+		}
 		ret = vote_rate_vdd(clk, clk->rate);
 		if (ret)
 			goto err_vote_vdd;
@@ -377,13 +377,14 @@ int clk_enable(struct clk *clk)
 			"%s: Don't call enable on unprepared clocks\n", name);
 	if (clk->count == 0) {
 		parent = clk->parent;
-
+		if (!(clk->flags & CLKFLAG_IGNORE)) {
 		ret = clk_enable(parent);
 		if (ret)
 			goto err_enable_parent;
 		ret = clk_enable(clk->depends);
 		if (ret)
 			goto err_enable_depends;
+		}
 
 		trace_clock_enable(name, 1, smp_processor_id());
 		if (clk->ops->enable)
@@ -909,6 +910,7 @@ static int __handoff_clk(struct clk *clk)
 		return -EPROBE_DEFER;
 
 	/* Handoff any 'depends' clock first. */
+	if (!(clk->flags&CLKFLAG_IGNORE)) {
 	rc = __handoff_clk(clk->depends);
 	if (rc)
 		goto err;
@@ -936,7 +938,7 @@ static int __handoff_clk(struct clk *clk)
 		if (rc)
 			goto err;
 	}
-
+	}
 	if (clk->ops->handoff)
 		state = clk->ops->handoff(clk);
 
@@ -947,7 +949,7 @@ static int __handoff_clk(struct clk *clk)
 			rc = -ENOMEM;
 			goto err;
 		}
-
+		if (!(clk->flags&CLKFLAG_IGNORE)) {
 		rc = clk_prepare_enable(clk->parent);
 		if (rc)
 			goto err;
@@ -955,6 +957,7 @@ static int __handoff_clk(struct clk *clk)
 		rc = clk_prepare_enable(clk->depends);
 		if (rc)
 			goto err_depends;
+		}
 
 		rc = vote_rate_vdd(clk, clk->rate);
 		WARN(rc, "%s unable to vote for voltage!\n", clk->dbg_name);

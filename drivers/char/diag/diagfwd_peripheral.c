@@ -30,6 +30,9 @@
 #include "diagfwd_socket.h"
 #include "diag_mux.h"
 #include "diag_ipc_logging.h"
+#include <linux/htc_flags.h>/*++ 2015/10/26, USB Team, PCN00029  ++*/
+
+int diag_initialized;/*++ 2015/10/23, USB Team, PCN00026 ++*/
 
 struct data_header {
 	uint8_t control_char;
@@ -219,6 +222,9 @@ static void diagfwd_data_read_done(struct diagfwd_info *fwd_info,
 	int write_len = 0;
 	unsigned char *write_buf = NULL;
 	struct diagfwd_buf_t *temp_buf = NULL;
+#if DIAG_XPST && !defined(CONFIG_DIAGFWD_BRIDGE_CODE)
+	int ret = 0;/*++ 2015/10/23, USB Team, PCN00026 ++*/
+#endif
 	struct diag_md_session_t *session_info = NULL;
 	uint8_t hdlc_disabled = 0;
 	if (!fwd_info || !buf || len <= 0) {
@@ -306,6 +312,28 @@ static void diagfwd_data_read_done(struct diagfwd_info *fwd_info,
 			goto end;
 		}
 	}
+/*++ 2015/10/23, USB Team, PCN00026 ++*/
+	if (fwd_info->peripheral == PERIPHERAL_MODEM) {
+		DIAGFWD_7K_RAWDATA(buf, "modem", DIAG_DBG_READ);
+#if DIAG_XPST && !defined(CONFIG_DIAGFWD_BRIDGE_CODE)
+		ret = checkcmd_modem_epst(buf);
+		if (ret) {
+			modem_to_userspace(buf, len, ret, 0);
+			/*++ 2015/10/26, USB Team, PCN00029 ++*/
+			/* The c8 command will send DM agent only, unless
+			 * the modem flag has been set for debug purpose,
+			 * after the flag set, the command will be send
+			 * to PC.
+			 */
+			if (!(get_radio_ex2_flag() & 0x80000000))
+				goto end;
+			/*-- 2015/10/26, USB Team, PCN00029 --*/
+		}
+	//	if (driver->qxdmusb_drop && driver->logging_mode == USB_MODE)
+	//		goto work;
+#endif
+	}
+/*-- 2015/10/23, USB Team, PCN00026 --*/
 
 	mutex_unlock(&fwd_info->data_mutex);
 	mutex_unlock(&driver->hdlc_disable_mutex);
@@ -689,7 +717,7 @@ int diagfwd_write(uint8_t peripheral, uint8_t type, void *buf, int len)
 	if (type == TYPE_CMD || type == TYPE_DCI_CMD) {
 		if (!driver->feature[peripheral].rcvd_feature_mask ||
 			!driver->feature[peripheral].sent_feature_mask) {
-			pr_debug_ratelimited("diag: In %s, feature mask for peripheral: %d not received or sent yet\n",
+			DIAGFWD_DBUG("diag: In %s, feature mask for peripheral: %d not received or sent yet\n",
 					     __func__, peripheral);
 			return 0;
 		}
@@ -804,13 +832,13 @@ int diagfwd_channel_open(struct diagfwd_info *fwd_info)
 		return -EIO;
 
 	if (!fwd_info->inited) {
-		pr_debug("diag: In %s, channel is not inited, p: %d, t: %d\n",
+		DIAGFWD_DBUG("diag: In %s, channel is not inited, p: %d, t: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type);
 		return -EINVAL;
 	}
 
 	if (fwd_info->ch_open) {
-		pr_debug("diag: In %s, channel is already open, p: %d, t: %d\n",
+		DIAGFWD_DBUG("diag: In %s, channel is already open, p: %d, t: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type);
 		return 0;
 	}
@@ -827,6 +855,11 @@ int diagfwd_channel_open(struct diagfwd_info *fwd_info)
 		if (fwd_info->p_ops && fwd_info->p_ops->open)
 			fwd_info->p_ops->open(fwd_info->ctxt);
 	}
+
+/*++ 2015/10/23, USB Team, PCN00026 ++*/
+	if (fwd_info->peripheral == PERIPHERAL_MODEM)
+		diag_initialized = 1;
+/*-- 2015/10/23, USB Team, PCN00026 --*/
 
 	return 0;
 }
@@ -848,6 +881,10 @@ int diagfwd_channel_close(struct diagfwd_info *fwd_info)
 	DIAG_LOG(DIAG_DEBUG_PERIPHERALS, "p: %d t: %d considered closed\n",
 		 fwd_info->peripheral, fwd_info->type);
 
+/*++ 2015/10/23, USB Team, PCN00026 ++*/
+	if (fwd_info->peripheral == PERIPHERAL_MODEM)
+		diag_initialized = 0;
+/*-- 2015/10/23, USB Team, PCN00026 --*/
 	return 0;
 }
 
@@ -908,7 +945,7 @@ void diagfwd_channel_read(struct diagfwd_info *fwd_info)
 	}
 
 	if (!fwd_info->inited || !atomic_read(&fwd_info->opened)) {
-		pr_debug("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
+		DIAGFWD_DBUG("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type,
 			 fwd_info->inited, atomic_read(&fwd_info->opened),
 			 fwd_info->ch_open);
@@ -945,7 +982,7 @@ void diagfwd_channel_read(struct diagfwd_info *fwd_info)
 			atomic_set(&temp_buf->in_busy, 1);
 		}
 	} else {
-		pr_debug("diag: In %s, both buffers are empty for p: %d, t: %d\n",
+		DIAGFWD_DBUG("diag: In %s, both buffers are empty for p: %d, t: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type);
 	}
 
@@ -977,7 +1014,7 @@ static void diagfwd_queue_read(struct diagfwd_info *fwd_info)
 		return;
 
 	if (!fwd_info->inited || !atomic_read(&fwd_info->opened)) {
-		pr_debug("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
+		DIAGFWD_DBUG("diag: In %s, p: %d, t: %d, inited: %d, opened: %d  ch_open: %d\n",
 			 __func__, fwd_info->peripheral, fwd_info->type,
 			 fwd_info->inited, atomic_read(&fwd_info->opened),
 			 fwd_info->ch_open);

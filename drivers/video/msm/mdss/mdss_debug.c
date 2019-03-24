@@ -217,6 +217,7 @@ static ssize_t panel_debug_base_reg_write(struct file *file,
 	ctrl_pdata = container_of(ctl->panel_data,
 		struct mdss_dsi_ctrl_pdata, panel_data);
 
+	pr_info("%s: reg[0]=%xh, len=%d\n", __func__, reg[0], len);
 	if (mdata->debug_inf.debug_enable_clock)
 		mdata->debug_inf.debug_enable_clock(1);
 
@@ -233,7 +234,8 @@ static ssize_t panel_debug_base_reg_read(struct file *file,
 			char __user *user_buf, size_t count, loff_t *ppos)
 {
 	struct mdss_debug_base *dbg = file->private_data;
-	u32 i, len = 0, reg_buf_len = 0;
+	u32 i, reg_buf_len = 0;
+	int len = 0;
 	char *panel_reg_buf, *rx_buf;
 	struct mdss_data_type *mdata = mdss_res;
 	struct mdss_mdp_ctl *ctl = mdata->ctl_off + 0;

@@ -44,6 +44,9 @@
 #include <linux/clk/msm-clk.h>
 #include <linux/msm-bus.h>
 #include <linux/irq.h>
+#include <linux/usb/htc_info.h>
+#include <linux/usb/class-dual-role.h>
+#include <linux/htc_flags.h>
 
 #include "power.h"
 #include "core.h"
@@ -53,7 +56,7 @@
 #include "xhci.h"
 
 #define DWC3_IDEV_CHG_MAX 1500
-#define DWC3_HVDCP_CHG_MAX 1800
+#define DWC3_HVDCP_CHG_MAX 1700
 #define DWC3_WAKEUP_SRC_TIMEOUT 5000
 
 #define MICRO_5V    5000000
@@ -188,6 +191,19 @@ enum dwc3_chg_type {
 	DWC3_PROPRIETARY_CHARGER,
 };
 
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+enum dwc3_pd_power_role {
+	POWER_SOURCE = 0,
+	POWER_SINK,
+	UNKNOWN_POWER_ROLE,
+};
+enum dwc3_pd_data_role {
+	DATA_HOST = 0,
+	DATA_DEVICE,
+	UNKNOWN_DATA_ROLE,
+};
+#endif
+
 struct dwc3_msm {
 	struct device *dev;
 	void __iomem *base;
@@ -239,6 +255,7 @@ struct dwc3_msm {
 	struct msm_bus_scale_pdata	*bus_scale_table;
 	struct power_supply	usb_psy;
 	enum power_supply_type	usb_supply_type;
+	struct power_supply	*batt_psy; /*++ 2015/10/29, USB Team, PCN00022 ++*/
 	unsigned int		online;
 	bool			in_host_mode;
 	unsigned int		voltage_max;
@@ -270,6 +287,19 @@ struct dwc3_msm {
 	atomic_t                in_p3;
 	unsigned int		lpm_to_suspend_delay;
 	bool			init;
+	/*++ 2015/10/13, USB Team, PCN00022 ++*/
+	struct work_struct disable_work;
+	/*-- 2015/10/13, USB Team, PCN00022 --*/
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+	struct delayed_work vbus_notify_work;
+	bool pd_vbus_change;
+	enum dwc3_pd_power_role power_role;
+	enum dwc3_pd_data_role data_role;
+#endif
+#if defined(CONFIG_MACH_DUMMY)
+	struct delayed_work		otg_tps_work;
+#endif
+	bool xo_vote_for_charger;
 
 	u32                     pm_qos_latency;
 	struct pm_qos_request   pm_qos_req_dma;
@@ -290,6 +320,16 @@ struct dwc3_msm {
 #define USB_SSPHY_1P8_HPM_LOAD		23000	/* uA */
 
 #define DSTS_CONNECTSPD_SS		0x4
+
+static struct dwc3_msm *context = NULL; /* 2015/10/12, USB Team, PCN00021 */
+
+/*++ 2015/10/13, USB Team, PCN00022 ++*/
+static int htc_id_backup;
+static int htc_vbus_backup;
+/*-- 2015/10/13, USB Team, PCN00022 --*/
+#if defined(CONFIG_MACH_DUMMY)
+static void dwc3_otg_tps_work(struct work_struct *w);
+#endif
 
 #define PM_QOS_SAMPLE_SEC		2
 #define PM_QOS_THRESHOLD_NOM		400
@@ -1574,7 +1614,7 @@ static void dwc3_restart_usb_work(struct work_struct *w)
 	enum dwc3_chg_type chg_type;
 	unsigned timeout = 50;
 
-	dev_dbg(mdwc->dev, "%s\n", __func__);
+	dev_info(mdwc->dev, "%s\n", __func__);
 
 	if (atomic_read(&dwc->in_lpm) || !dwc->is_drd) {
 		dev_dbg(mdwc->dev, "%s failed!!!\n", __func__);
@@ -1923,6 +1963,25 @@ static const char *chg_to_string(enum dwc3_chg_type chg_type)
 	}
 }
 
+/*++ 2015/10/13, USB Team, PCN00022 ++*/
+void dwc3_otg_set_id_state(int id)
+{
+	struct dwc3_msm *dwc3_msm = context;
+	if (id == 0) {
+		printk("[USB] Enter Host mode\n");
+		dwc3_msm->id_state = DWC3_ID_GROUND;
+		//dwc3_msm->hs_phy->is_in_host = true; // Used for modifying host mode PHY setting
+		htc_id_backup = DWC3_ID_GROUND;
+	} else {
+		printk("[USB] Exit from Host mode or Disconnected\n");
+		dwc3_msm->id_state = DWC3_ID_FLOAT;
+		//dwc3_msm->hs_phy->is_in_host = false; // Used for modifying host mode PHY setting
+		htc_id_backup = DWC3_ID_FLOAT;
+	}
+	schedule_work(&dwc3_msm->resume_work.work);
+}
+/*-- 2015/10/13, USB Team, PCN00022 --*/
+
 static void dwc3_msm_power_collapse_por(struct dwc3_msm *mdwc)
 {
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
@@ -2146,7 +2205,13 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	 */
 	clk_disable_unprepare(mdwc->iface_clk);
 	/* USB PHY no more requires TCXO */
-	clk_disable_unprepare(mdwc->xo_clk);
+	if (!mdwc->xo_vote_for_charger) {
+		clk_disable_unprepare(mdwc->xo_clk);
+		dev_err(mdwc->dev, "%s unvote for TCXO buffer\n", __func__);
+	} else {
+		dev_err(mdwc->dev, "%s xo_vote_for_charger = %d\n",
+			__func__, mdwc->xo_vote_for_charger);
+	}
 
 	/* Perform controller power collapse */
 	if (!mdwc->in_host_mode && (!mdwc->vbus_active ||
@@ -2214,10 +2279,18 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 	pm_stay_awake(mdwc->dev);
 
 	/* Vote for TCXO while waking up USB HSPHY */
-	ret = clk_prepare_enable(mdwc->xo_clk);
-	if (ret)
-		dev_err(mdwc->dev, "%s failed to vote TCXO buffer%d\n",
-						__func__, ret);
+	if (!mdwc->xo_vote_for_charger) {
+		ret = clk_prepare_enable(mdwc->xo_clk);
+		if (ret)
+			dev_err(mdwc->dev, "%s failed to vote TCXO buffer%d\n",
+				__func__, ret);
+		else
+			dev_err(mdwc->dev, "%s vote for TCXO buffer\n",
+					__func__);
+	} else {
+		dev_err(mdwc->dev, "%s xo_vote_for_charger = %d\n",
+			__func__, mdwc->xo_vote_for_charger);
+	}
 
 	/* Restore controller power collapse */
 	if (mdwc->lpm_flags & MDWC3_POWER_COLLAPSE) {
@@ -2238,6 +2311,11 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 	clk_prepare_enable(mdwc->iface_clk);
 	clk_set_rate(mdwc->core_clk, mdwc->core_clk_rate);
 	clk_prepare_enable(mdwc->core_clk);
+
+	/* set Memory core: ON, Memory periphery: ON */
+	clk_set_flags(mdwc->core_clk, CLKFLAG_RETAIN_MEM);
+	clk_set_flags(mdwc->core_clk, CLKFLAG_RETAIN_PERIPH);
+
 	clk_prepare_enable(mdwc->utmi_clk);
 	if (mdwc->bus_aggr_clk)
 		clk_prepare_enable(mdwc->bus_aggr_clk);
@@ -2337,10 +2415,18 @@ static void dwc3_ext_event_notify(struct dwc3_msm *mdwc)
 		clear_bit(ID, &mdwc->inputs);
 	}
 
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+	if ((mdwc->vbus_active || mdwc->data_role == DATA_DEVICE) && !mdwc->in_restart) {
+		dev_dbg(mdwc->dev, "XCVR: BSV set\n");
+		set_bit(B_SESS_VLD, &mdwc->inputs);
+	}
+#else
 	if (mdwc->vbus_active && !mdwc->in_restart) {
 		dbg_event(0xFF, "BSV set", 0);
 		set_bit(B_SESS_VLD, &mdwc->inputs);
-	} else {
+	}
+#endif
+	else {
 		dbg_event(0xFF, "BSV clear", 0);
 		clear_bit(B_SESS_VLD, &mdwc->inputs);
 	}
@@ -2536,6 +2622,42 @@ static int dwc3_msm_power_get_property_usb(struct power_supply *psy,
 	return 0;
 }
 
+static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on);
+
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+extern struct completion pr_swap_rsp;
+extern struct completion dr_swap_rsp;
+#if defined(CONFIG_ANALOGIX_OHIO)
+extern int ohio_get_data_value(int data_member);
+extern int ohio_set_data_value(int data_member, int val);
+extern struct dual_role_phy_instance *ohio_get_dual_role_instance(void);
+#else
+extern int anx7688_get_prop(u8 prop);
+extern int anx7688_set_prop(u8 prop, int val);
+extern struct dual_role_phy_instance *anx7688_get_dual_role_instance(void);
+#endif
+
+static void dwc3_notify_vbus_work(struct work_struct *w)
+{
+	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm,
+								vbus_notify_work.work);
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+
+	pr_info("%s: pd_vbus_change = %d\n", __func__, mdwc->pd_vbus_change);
+	if (!mdwc->pd_vbus_change) {
+		if (dwc->is_drd && !mdwc->in_restart) {
+			pr_info("%s: maybe cable out or SINK first connect, resume state machine\n", __func__);
+			queue_delayed_work(mdwc->dwc3_resume_wq,
+					&mdwc->resume_work, 0);
+		}
+	}
+	else
+		pr_info("%s: during PR_SWAP, skip this PMIC event\n", __func__);
+
+	mdwc->pd_vbus_change = 0;
+}
+#endif
+
 static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 				  enum power_supply_property psp,
 				  const union power_supply_propval *val)
@@ -2581,6 +2703,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PRESENT:
 		dev_dbg(mdwc->dev, "%s: notify xceiv event with val:%d\n",
 							__func__, val->intval);
+		pr_info("check_vbus_in : %d -> %d\n", mdwc->vbus_active, val->intval);
 		/*
 		 * Now otg_sm_work() state machine waits for USB cable status.
 		 * Hence here it makes sure that schedule resume work only if
@@ -2589,6 +2712,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		 */
 		if (mdwc->otg_state == OTG_STATE_UNDEFINED) {
 			mdwc->vbus_active = val->intval;
+			htc_vbus_backup = val->intval; /*++ 2015/10/13, USB Team, PCN00022 ++*/
 			queue_delayed_work(mdwc->dwc3_resume_wq,
 					&mdwc->resume_work, 0);
 			break;
@@ -2598,6 +2722,52 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			break;
 
 		mdwc->vbus_active = val->intval;
+		htc_vbus_backup = val->intval; /*++ 2015/10/13, USB Team, PCN00022 ++*/
+
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+		/* when doing src-to-sink mode change, if we get vbus in 0->1, this mode change success. */
+#if defined(CONFIG_ANALOGIX_OHIO)
+		if (mdwc->vbus_active && (ohio_get_data_value(3) == 1 /*mode change SRC_TO_SNK*/)) {
+			pr_swap_rsp.done = 1;
+			complete(&pr_swap_rsp);
+		}
+#else
+		/* prole change SRC_TO_SNK*/
+		if (mdwc->vbus_active && (anx7688_get_prop(ANX_PROLE_CHANGE) == 1)) {
+			pr_swap_rsp.done = 1;
+			complete(&pr_swap_rsp);
+		}
+#endif
+
+		/* only Sink -> Source case needs to delay 500ms*/
+		/* Due to Vbus change 1 -> 0 comes first, we should delay this event */
+		/* If pr_swap, the pd_vbus_change flag should be set within 500ms */
+		if (!mdwc->vbus_active) {
+			pr_info("%s: delay 500ms to confirm disconnect or pr_swap\n", __func__);
+			schedule_delayed_work(&mdwc->vbus_notify_work, msecs_to_jiffies(500));
+		}
+		/* Source -> Sink case: Vbus change 0 -> 1 comes later, no need to delay*/
+		else {
+#if defined(CONFIG_ANALOGIX_OHIO)
+			if (!ohio_set_data_value(1, 1)) { // if ohio is enabled, set power role to sink
+				ohio_set_data_value(2, 0); // set port mode to UFP
+				dual_role_instance_changed(ohio_get_dual_role_instance()); //send uevent
+			}
+#else
+			if (!anx7688_set_prop(ANX_PROLE, 1)) { // if anx7688 is enabled, set power role to sink
+				anx7688_set_prop(ANX_PMODE, 0); // set port mode to UFP
+				/* send uevent */
+				if (anx7688_get_dual_role_instance())
+					dual_role_instance_changed(anx7688_get_dual_role_instance());
+			}
+#endif
+			/*
+			 * Set debouncing delay to 120ms. Otherwise battery
+			 * charging CDP complaince test fails if delay > 120ms.
+			 */
+			schedule_delayed_work(&mdwc->vbus_notify_work, 12);
+		}
+#else
 		if (dwc->is_drd && !mdwc->in_restart) {
 			dbg_event(0xFF, "Q RW (vbus)", val->intval);
 			dbg_event(0xFF, "stayVbus", 0);
@@ -2608,6 +2778,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 					&mdwc->resume_work, 0);
 			}
 		}
+#endif
 		break;
 	case POWER_SUPPLY_PROP_ONLINE:
 		mdwc->online = val->intval;
@@ -2658,6 +2829,10 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			mdwc->voltage_max = MICRO_9V;
 			dwc3_msm_gadget_vbus_draw(mdwc, hvdcp_max_current);
 			break;
+		case POWER_SUPPLY_TYPE_USB_HVDCP_3:
+			mdwc->chg_type = DWC3_DCP_CHARGER;
+			mdwc->voltage_max = MICRO_9V;
+			break;
 		case POWER_SUPPLY_TYPE_USB_CDP:
 			mdwc->chg_type = DWC3_CDP_CHARGER;
 			mdwc->voltage_max = MICRO_5V;
@@ -2675,6 +2850,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 
 		dev_dbg(mdwc->dev, "%s: charger type: %s\n", __func__,
 				chg_to_string(mdwc->chg_type));
+		pr_info("charger type: %s\n", chg_to_string(mdwc->chg_type));
 		break;
 	case POWER_SUPPLY_PROP_HEALTH:
 		mdwc->health_status = val->intval;
@@ -2686,6 +2862,91 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 	power_supply_changed(&mdwc->usb_psy);
 	return 0;
 }
+
+int usb_set_dwc_property(int prop_type, unsigned int value)
+{
+	struct dwc3_msm *dwc3_msm = context;
+
+	int ret = 0;
+	switch(prop_type) {
+	case PROPERTY_CHG_STATUS:
+		dwc3_msm->chg_type = value;
+		break;
+	case PROPERTY_RESTART_USB:
+		break;
+	case PROPERTY_VBUS_STATUS:
+		dwc3_msm->vbus_active = value;
+		break;
+	case PROPERTY_CURRENT_MAX:
+		dwc3_msm->current_max = value;
+		pr_info("%s: current_max = %d\n", __func__, dwc3_msm->current_max);
+		break;
+	default:
+		ret = 0;
+		break;
+	}
+	return ret;
+}
+EXPORT_SYMBOL(usb_set_dwc_property);
+
+/*++ 2015/10/12, USB Team, PCN00021 ++*/
+int usb_get_dwc_property(int prop_type)
+{
+	struct dwc3_msm *dwc3_msm = context;
+
+	int ret = 0;
+	switch(prop_type) {
+	case PROPERTY_CHG_STATUS:
+		ret = dwc3_msm->chg_type;
+		break;
+	case PROPERTY_RESTART_USB:
+		dwc3_restart_usb_work(&dwc3_msm->restart_usb_work);
+		ret = 1;
+	case PROPERTY_VBUS_STATUS:
+		ret = dwc3_msm->vbus_active;
+	default:
+		ret = 0;
+		break;
+	}
+	return ret;
+}
+EXPORT_SYMBOL(usb_get_dwc_property);
+/*-- 2015/10/12, USB Team, PCN00021 --*/
+/*++ 2015/10/13, USB Team, PCN00022 ++*/
+void htc_dwc3_disable_usb(int state)
+{
+	struct dwc3_msm *mdwc = context;
+	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+
+	if (state == 1) {
+		dwc->usb_disable = 1;
+		if (mdwc->otg_state == OTG_STATE_B_PERIPHERAL) {
+			flush_delayed_work(&mdwc->resume_work);
+			dwc->notify_usb_disabled();
+		}
+		else
+			pr_info("not in b_peripheral, skip\n");
+	} else {
+		dwc->usb_disable = 0;
+		mdwc->vbus_active = htc_vbus_backup;
+		mdwc->id_state = htc_id_backup;
+		pr_info("htc_dwc3_disable_usb: charger type: %s\n",
+			chg_to_string(mdwc->chg_type));
+
+		switch (mdwc->chg_type) {
+		case DWC3_INVALID_CHARGER:
+		case DWC3_DCP_CHARGER:
+		case DWC3_PROPRIETARY_CHARGER:
+			return;
+		case DWC3_CDP_CHARGER:
+		case DWC3_SDP_CHARGER:
+		default:
+			break;
+		}
+		schedule_delayed_work(&mdwc->resume_work, msecs_to_jiffies(20));
+	}
+}
+/*-- 2015/10/13, USB Team, PCN00022 --*/
 
 static int
 dwc3_msm_property_is_writeable(struct power_supply *psy,
@@ -2858,6 +3119,26 @@ static int dwc3_msm_get_clk_gdsc(struct dwc3_msm *mdwc)
 	return 0;
 }
 
+/*++ 2015/10/13, USB Team, PCN00022 ++*/
+static int dwc3_otg_start_peripheral(struct dwc3_msm *mdwc, int on);
+static void usb_disable_work(struct work_struct *w)
+{
+	struct dwc3_msm *mdwc = container_of(w, struct dwc3_msm, disable_work);
+
+	printk(KERN_INFO "[USB] %s\n", __func__);
+	dwc3_otg_start_peripheral(mdwc, 0);
+	mdwc->otg_state = OTG_STATE_B_IDLE;
+	pm_runtime_put_sync(mdwc->dev);
+}
+
+static void dwc3_msm_notify_usb_disabled(void)
+{
+	struct dwc3_msm *mdwc = context;
+	schedule_work(&mdwc->disable_work);
+	printk(KERN_INFO "[USB] %s\n", __func__);
+}
+/*-- 2015/10/13, USB Team, PCN00022 --*/
+
 static ssize_t mode_show(struct device *dev, struct device_attribute *attr,
 		char *buf)
 {
@@ -2937,6 +3218,10 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	int ret = 0;
 	int ext_hub_reset_gpio;
 	u32 val;
+	/*++ 2015/10/13, USB Team, PCN00022 ++*/
+	htc_vbus_backup = 0;
+	htc_id_backup = 1;
+	/*-- 2014/10/13, USB Team, PCN00022 --*/
 
 	mdwc = devm_kzalloc(&pdev->dev, sizeof(*mdwc), GFP_KERNEL);
 	if (!mdwc)
@@ -2953,11 +3238,19 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, mdwc);
+	context = mdwc; /* 2015/10/12, USB Team, PCN00021 */
 	mdwc->dev = &pdev->dev;
 
 	INIT_LIST_HEAD(&mdwc->req_complete_list);
 	INIT_DELAYED_WORK(&mdwc->resume_work, dwc3_resume_work);
 	INIT_WORK(&mdwc->restart_usb_work, dwc3_restart_usb_work);
+	INIT_WORK(&mdwc->disable_work, usb_disable_work); 	/*++ 2015/10/13, USB Team, PCN00022 ++*/
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+	INIT_DELAYED_WORK(&mdwc->vbus_notify_work, dwc3_notify_vbus_work);
+#endif
+#if defined(CONFIG_MACH_DUMMY)
+	INIT_DELAYED_WORK(&mdwc->otg_tps_work, dwc3_otg_tps_work);
+#endif
 	INIT_DELAYED_WORK(&mdwc->sm_work, dwc3_msm_otg_sm_work);
 	INIT_DELAYED_WORK(&mdwc->perf_vote_work, dwc3_msm_otg_perf_vote_work);
 
@@ -3216,7 +3509,11 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 	host_mode = of_usb_get_dr_mode(dwc3_node) == USB_DR_MODE_HOST;
 	/* usb_psy required only for vbus_notifications */
 	if (!host_mode && !mdwc->psy_not_used) {
+#ifdef CONFIG_MACH_AIO
+        mdwc->usb_psy.name = "usb_dp";
+#else
 		mdwc->usb_psy.name = "usb";
+#endif
 		mdwc->usb_psy.type = POWER_SUPPLY_TYPE_USB;
 		mdwc->usb_psy.supplied_to = dwc3_msm_pm_power_supplied_to;
 		mdwc->usb_psy.num_supplicants = ARRAY_SIZE(
@@ -3309,6 +3606,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		enable_irq_wake(mdwc->pmic_id_irq);
 	}
 
+	dwc->notify_usb_disabled = dwc3_msm_notify_usb_disabled; /*++ 2015/10/13, USB Team, PCN00022 ++*/
+
 	if (dwc->is_drd) {
 		device_create_file(&pdev->dev, &dev_attr_mode);
 		device_create_file(&pdev->dev, &dev_attr_xhci_link_compliance);
@@ -3386,6 +3685,7 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	}
 
 	cancel_delayed_work_sync(&mdwc->sm_work);
+	cancel_work_sync(&mdwc->disable_work); /*++ 2015/10/13, USB Team, PCN00022 ++*/
 
 	if (mdwc->usb_psy.dev)
 		power_supply_unregister(&mdwc->usb_psy);
@@ -3420,6 +3720,7 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	clk_disable_unprepare(mdwc->sleep_clk);
 	clk_disable_unprepare(mdwc->xo_clk);
 	clk_put(mdwc->xo_clk);
+	mdwc->xo_vote_for_charger = false;
 
 	dwc3_msm_config_gdsc(mdwc, 0);
 
@@ -3427,6 +3728,216 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 }
 
 #define VBUS_REG_CHECK_DELAY	(msecs_to_jiffies(1000))
+
+#if defined(CONFIG_MACH_DUMMY)
+#define tps_max_retry	10
+bool tps_switch = 0;	/* 0: switch to default; 1: switch to TPS*/
+bool tps_status = 0;
+static void dwc3_otg_tps_work(struct work_struct *w)
+{
+	struct dwc3_msm *mdwc = context;
+	union power_supply_propval batt_propval;
+	int otg_status, i;
+	int ret;
+
+	if (!mdwc)
+		return;
+
+	pr_info("%s: tps work\n", __func__);
+
+	if (!mdwc->batt_psy) {
+		for (i = 0; i < tps_max_retry; i++) {
+			mdwc->batt_psy = power_supply_get_by_name("battery");
+			if (mdwc->batt_psy)
+				break;
+			msleep(500);
+		}
+		if (!mdwc->batt_psy) {
+			pr_err("%s: Unable to get battery psy\n", __func__);
+			return;
+		}
+	}
+
+	if (!mdwc->vbus_reg) {
+		mdwc->vbus_reg = devm_regulator_get_optional(mdwc->dev,
+					"vbus_dwc3");
+		if (IS_ERR(mdwc->vbus_reg)) {
+			mdwc->vbus_reg = NULL;
+			pr_err("%s: regulator not ready, rc = %ld\n",
+				__func__, PTR_ERR(mdwc->vbus_reg));
+		}
+	}
+
+	mdwc->batt_psy->get_property(
+		mdwc->batt_psy, POWER_SUPPLY_PROP_TPS_OTG_ENABLE, &batt_propval);
+	otg_status = batt_propval.intval;
+	pr_info("%s: current OTG status = %d\n", __func__, otg_status);
+
+	if (tps_switch) {
+		if (!tps_status) {
+			batt_propval.intval = 1;
+			mdwc->batt_psy->set_property(
+				mdwc->batt_psy, POWER_SUPPLY_PROP_TPS_OTG_ENABLE, &batt_propval);
+			tps_status = 1;
+			pr_info("%s: tps on\n", __func__);
+			if (mdwc->vbus_reg && regulator_is_enabled(mdwc->vbus_reg)) {
+				ret = regulator_disable(mdwc->vbus_reg);
+				if (ret)
+					pr_err("%s: unable to disable vbus_reg\n", __func__);
+			}
+		}
+	}
+	else {
+		batt_propval.intval = 0;
+		mdwc->batt_psy->set_property(
+			mdwc->batt_psy, POWER_SUPPLY_PROP_TPS_OTG_ENABLE, &batt_propval);
+		tps_status = 0;
+		pr_info("%s: tps off\n", __func__);
+	}
+
+	return;
+}
+
+void dwc3_otg_switch_power_source(bool on)
+{
+	struct dwc3_msm *mdwc = context;
+
+	if (!mdwc || (tps_status && on))
+		return;
+
+	tps_switch = on;
+	schedule_delayed_work(&mdwc->otg_tps_work, msecs_to_jiffies(100));
+	return;
+}
+EXPORT_SYMBOL_GPL(dwc3_otg_switch_power_source);
+#endif
+
+#if defined(CONFIG_ANALOGIX_OHIO) || defined(CONFIG_ANALOGIX_7688)
+int dwc3_pd_vbus_ctrl(int on)
+{
+	struct dwc3_msm *mdwc = context;
+	struct dwc3 *dwc = NULL;
+	int ret = 0;
+
+	if (!mdwc || !mdwc->dwc3)
+		return -EFAULT;
+	dwc = platform_get_drvdata(mdwc->dwc3);
+
+	pr_debug("%s: on = %d\n", __func__, on);
+	if (on == -1) { // cable disconnect
+		mdwc->pd_vbus_change = 0;
+		mdwc->power_role = UNKNOWN_POWER_ROLE;
+		mdwc->data_role = UNKNOWN_DATA_ROLE;
+	}
+	else {
+#if defined(CONFIG_ANALOGIX_OHIO)
+		mdwc->pd_vbus_change = 1;
+		pr_info("%s: set pd vbus flag to 1\n", __func__);
+#else
+		if (anx7688_get_prop(ANX_PROLE_CHANGE) != 0) {
+			mdwc->pd_vbus_change = 1;
+			pr_info("%s: set pd vbus flag to 1\n", __func__);
+			anx7688_set_prop(ANX_PROLE_CHANGE, 0);
+		}
+#endif
+	}
+
+	if (!mdwc->vbus_reg) {
+		mdwc->vbus_reg = devm_regulator_get_optional(mdwc->dev,
+					"vbus_dwc3");
+		if (IS_ERR(mdwc->vbus_reg) &&
+				PTR_ERR(mdwc->vbus_reg) == -EPROBE_DEFER) {
+			/* regulators may not be ready, so retry again later */
+			mdwc->vbus_reg = NULL;
+			pr_err("%s: regulator not ready, rc = %d\n", __func__, -EPROBE_DEFER);
+			return -EPROBE_DEFER;
+		}
+	}
+
+	if (on == 1) {
+		dev_dbg(mdwc->dev, "%s: turn on regulator\n", __func__);
+
+		if (!IS_ERR(mdwc->vbus_reg)) {
+			if (!regulator_is_enabled(mdwc->vbus_reg)) {
+				ret = regulator_enable(mdwc->vbus_reg);
+				pr_debug("%s: regulator_enable, ret = %d\n",__func__, ret);
+				if (ret) {
+					dev_err(dwc->dev, "unable to enable vbus_reg\n");
+					pr_err("%s: unable to enable vbus_reg\n", __func__);
+					return ret;
+				}
+			}
+			else
+				pr_info("%s: regulator already enabled\n", __func__);
+		}
+		else {
+			pr_err("%s: ERR: vbus_reg, err_code = %ld\n", __func__, PTR_ERR(mdwc->vbus_reg));
+			return -1;
+		}
+		mdwc->power_role = POWER_SOURCE;
+		pr_debug("%s: turn on Vbus\n", __func__);
+#if defined(CONFIG_ANALOGIX_OHIO)
+		if (ohio_get_data_value(3) == 2 /* mode change SNK_TO_SRC */) {
+			pr_info("during try_source, Vbus output should be ready 40ms later\n");
+			pr_swap_rsp.done = 1;
+			complete(&pr_swap_rsp);
+		}
+#else
+		if (anx7688_get_prop(ANX_PROLE_CHANGE) == 2 /* mode change SNK_TO_SRC */) {
+			pr_info("during try_source, Vbus output should be ready 40ms later\n");
+			pr_swap_rsp.done = 1;
+			complete(&pr_swap_rsp);
+		}
+#endif
+	}
+	else { // on == 0   or   on == -1
+		dev_dbg(dwc->dev, "%s: turn off regulator\n", __func__);
+
+#if defined(CONFIG_MACH_DUMMY)
+		if (tps_status) {
+			tps_switch = 0;
+			schedule_delayed_work(&mdwc->otg_tps_work, 0);
+		}
+#endif
+		if (!IS_ERR(mdwc->vbus_reg) && regulator_is_enabled(mdwc->vbus_reg)) {
+			ret = regulator_disable(mdwc->vbus_reg);
+			if (ret) {
+				dev_err(dwc->dev, "unable to disable vbus_reg\n");
+				return ret;
+			}
+		}
+		if (on == 0)
+			mdwc->power_role = POWER_SINK;
+		pr_debug("%s: turn off Vbus\n", __func__);
+	}
+	return ret;
+}
+
+/*
+ *  new_role: 0:DFP(HOST)  1:UFP(DEVICE)
+ */
+int dwc3_pd_drswap(int new_role)
+{
+	struct dwc3_msm *mdwc = context;
+	int ret = 0;
+	if (IS_ERR_OR_NULL(mdwc))
+		return -EFAULT;
+
+	pr_info("%s: 0:HOST 1:DEVICE; new_role = %d\n", __func__, new_role);
+
+	if (new_role) { // swap to UFP
+		set_bit(B_SESS_VLD, &mdwc->inputs);
+		mdwc->chg_type = DWC3_SDP_CHARGER;
+		mdwc->data_role = DATA_DEVICE;
+	}
+	else { // swap to DFP
+		mdwc->data_role = DATA_HOST;
+	}
+	return ret;
+}
+EXPORT_SYMBOL(dwc3_pd_vbus_ctrl);
+EXPORT_SYMBOL(dwc3_pd_drswap);
+#endif
 
 static void dwc3_pm_qos_update_latency(struct dwc3_msm *mdwc, s32 latency)
 {
@@ -3580,6 +4091,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		mdwc->hs_phy->flags |= PHY_HOST_MODE;
 		mdwc->ss_phy->flags |= PHY_HOST_MODE;
 		usb_phy_notify_connect(mdwc->hs_phy, USB_SPEED_HIGH);
+#if !defined(CONFIG_ANALOGIX_OHIO) && !defined(CONFIG_ANALOGIX_7688)
 		if (!IS_ERR(mdwc->vbus_reg))
 			ret = regulator_enable(mdwc->vbus_reg);
 		if (ret) {
@@ -3591,6 +4103,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 				atomic_read(&mdwc->dev->power.usage_count));
 			return ret;
 		}
+#endif
 
 		dwc3_set_mode(dwc, DWC3_GCTL_PRTCAP_HOST);
 
@@ -3661,12 +4174,14 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		dev_dbg(mdwc->dev, "%s: turn off host\n", __func__);
 
 		usb_unregister_atomic_notify(&mdwc->usbdev_nb);
+#if !defined(CONFIG_ANALOGIX_OHIO) && !defined(CONFIG_ANALOGIX_7688)
 		if (!IS_ERR(mdwc->vbus_reg))
 			ret = regulator_disable(mdwc->vbus_reg);
 		if (ret) {
 			dev_err(mdwc->dev, "unable to disable vbus_reg\n");
 			return ret;
 		}
+#endif
 
 		cancel_delayed_work_sync(&mdwc->perf_vote_work);
 		dwc3_msm_perf_vote_update(mdwc, DWC3_PERF_OFF);
@@ -3823,6 +4338,21 @@ skip_psy_type:
 
 	dev_info(mdwc->dev, "Avail curr from USB = %u\n", mA);
 
+	/* HTC hack: When usb suspend, current_ma will be set to 2mA and stop charging.
+	   If Vbus is present, we would like to keep charging.*/
+	if (mdwc->vbus_active && (mA == 2)) {
+		switch (mdwc->chg_type) {
+			case DWC3_CDP_CHARGER:
+				mA = 1500;
+				break;
+			default:
+				mA = 500;
+				break;
+		}
+		pr_info("%s: USB suspends while charger exists, reset to %d mA\n",
+			__func__, mA);
+	}
+
 	if (mdwc->max_power <= 2 && mA > 2) {
 		/* Enable Charging */
 		if (power_supply_set_online(&mdwc->usb_psy, true))
@@ -3845,6 +4375,35 @@ skip_psy_type:
 
 	power_supply_changed(&mdwc->usb_psy);
 	mdwc->max_power = mA;
+	if (mdwc->chg_type == DWC3_DCP_CHARGER) {
+		if (!mdwc->xo_vote_for_charger) {
+			struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+
+			if (atomic_read(&dwc->in_lpm)) {
+				int ret;
+				ret = clk_prepare_enable(mdwc->xo_clk);
+				if (ret)
+					dev_err(mdwc->dev, "%s failed to vote TCXO buffer%d\n",
+						__func__, ret);
+				else
+					dev_err(mdwc->dev, "%s TCXO enabled\n",
+						__func__);
+			}
+			mdwc->xo_vote_for_charger = true;
+		}
+	} else {
+		if (mdwc->xo_vote_for_charger) {
+			struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
+
+			if (atomic_read(&dwc->in_lpm)) {
+				clk_disable_unprepare(mdwc->xo_clk);
+				dev_err(mdwc->dev, "%s TCXO disabled\n",
+					__func__);
+			}
+			mdwc->xo_vote_for_charger = false;
+		}
+	}
+
 	return 0;
 
 psy_error:
@@ -3941,6 +4500,7 @@ static void dwc3_msm_otg_sm_work(struct work_struct *w)
 
 	state = usb_otg_state_string(mdwc->otg_state);
 	dev_dbg(mdwc->dev, "%s state\n", state);
+	pr_info("%s: %s state\n", __func__, state);
 	dbg_event(0xFF, state, 0);
 
 	/* Check OTG state */
@@ -4196,7 +4756,6 @@ static void dwc3_msm_otg_sm_work(struct work_struct *w)
 						DWC3_WAKEUP_SRC_TIMEOUT);
 		}
 		break;
-
 	default:
 		dev_err(mdwc->dev, "%s: invalid otg-state\n", __func__);
 

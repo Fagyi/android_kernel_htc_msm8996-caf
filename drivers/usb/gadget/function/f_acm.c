@@ -83,7 +83,7 @@ static unsigned int no_acm_smd_ports;
 static unsigned int nr_acm_ports;
 static unsigned int acm_next_free_port;
 
-#define GSERIAL_NO_PORTS 4
+#define GSERIAL_NO_PORTS 8 /*++ 2015/06/23 USB Team, PCN00004 ++*/
 
 static struct acm_port_info {
 	enum transport_type	transport;

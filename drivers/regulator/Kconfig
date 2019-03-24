@@ -510,6 +510,15 @@ config REGULATOR_PCAP
 	 This driver provides support for the voltage regulators of the
 	 PCAP2 PMIC.
 
+config REGULATOR_LM363X
+	tristate "TI LM363X voltage regulators"
+	depends on MFD_TI_LMU
+	help
+	  This driver supports LM36272/4, LM3631 and LM3632 voltage regulators
+	  for the LCD bias.
+	  One boost output voltage is configurable and always on.
+	  Other LDOs are used for the display module.
+
 config REGULATOR_PCF50633
 	tristate "NXP PCF50633 regulator driver"
 	depends on MFD_PCF50633

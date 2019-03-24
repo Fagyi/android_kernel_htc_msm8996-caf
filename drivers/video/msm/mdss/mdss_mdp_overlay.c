@@ -1836,6 +1836,8 @@ int mdss_mode_switch(struct msm_fb_data_type *mfd, u32 mode)
 		mdss_mdp_update_panel_info(mfd, 1, 0);
 		mdss_mdp_switch_to_cmd_mode(ctl, 0);
 		mdss_mdp_ctl_stop(ctl, MDSS_PANEL_POWER_OFF);
+		writel_relaxed(0xffffffff, ctl->mdata->mdp_base + MDSS_REG_HW_INTR2_CLEAR);
+		wmb();
 	} else if (mode == MIPI_VIDEO_PANEL) {
 		if (ctl->ops.wait_pingpong)
 			rc = ctl->ops.wait_pingpong(ctl, NULL);
@@ -1881,6 +1883,8 @@ int mdss_mode_switch_post(struct msm_fb_data_type *mfd, u32 mode)
 			MDSS_EVENT_DSI_DYNAMIC_SWITCH,
 			(void *) MIPI_VIDEO_PANEL, CTL_INTF_EVENT_FLAG_DEFAULT);
 		pr_debug("%s, end\n", __func__);
+		writel_relaxed(0xffffffff, ctl->mdata->mdp_base + MDSS_REG_HW_INTR2_CLEAR);
+		wmb();
 	} else if (mode == MIPI_CMD_PANEL) {
 		/*
 		 * Needed to balance out clk refcount when going
@@ -1916,13 +1920,18 @@ static void __validate_and_set_roi(struct msm_fb_data_type *mfd,
 	struct mdss_rect l_roi = {0}, r_roi = {0};
 	struct mdp_rect tmp_roi = {0};
 	bool skip_partial_update = true;
+	bool need_rewrite_roi = false;
 
-	if (!commit)
+	if (!commit) {
+		need_rewrite_roi = true;
 		goto set_roi;
+	}
 
 	if (!memcmp(&commit->l_roi, &tmp_roi, sizeof(tmp_roi)) &&
-	    !memcmp(&commit->r_roi, &tmp_roi, sizeof(tmp_roi)))
+	    !memcmp(&commit->r_roi, &tmp_roi, sizeof(tmp_roi))) {
+		need_rewrite_roi = true;
 		goto set_roi;
+	}
 
 	rect_copy_mdp_to_mdss(&commit->l_roi, &l_roi);
 	rect_copy_mdp_to_mdss(&commit->r_roi, &r_roi);
@@ -1983,6 +1992,25 @@ static void __validate_and_set_roi(struct msm_fb_data_type *mfd,
 	}
 
 set_roi:
+	if (mfd->panel_info->aod.supported && need_rewrite_roi) {
+		struct aod_panel_info *aod = &mfd->panel_info->aod;
+		pr_info("AOD power_state=%d, next_state=%d\n",
+			mfd->panel_info->aod.power_state, mfd->panel_info->aod.next_state);
+
+		if ((aod->power_state == FB_AOD_PARTIAL_ON && !commit) || aod->next_state == FB_AOD_PARTIAL_ON) {
+			l_roi = (struct mdss_rect){0, aod->height,
+					ctl->mixer_left->width,
+					ctl->mixer_left->height - aod->height};
+			if (ctl->mixer_right) {
+				r_roi = (struct mdss_rect) {0, aod->height,
+						ctl->mixer_right->width,
+						ctl->mixer_right->height - aod->height};
+			}
+
+			skip_partial_update = false;
+		}
+	}
+
 	if (skip_partial_update) {
 		l_roi = (struct mdss_rect){0, 0,
 				ctl->mixer_left->width,
@@ -3622,12 +3650,14 @@ int mdss_mdp_overlay_vsync_ctrl(struct msm_fb_data_type *mfd, int en)
 		goto end;
 	}
 
+	mdp5_data->vsync_en = en;
+
 	if (!ctl->panel_data->panel_info.cont_splash_enabled
 		&& (!mdss_mdp_ctl_is_power_on(ctl) ||
 		mdss_panel_is_power_on_ulp(ctl->power_state))) {
 		pr_debug("fb%d vsync pending first update en=%d, ctl power state:%d\n",
 				mfd->index, en, ctl->power_state);
-		rc = -EPERM;
+		rc = 0;
 		goto end;
 	}
 
@@ -5947,6 +5977,13 @@ static int mdss_mdp_overlay_on(struct msm_fb_data_type *mfd)
 	}
 
 panel_on:
+	if (mdp5_data->vsync_en) {
+		pr_info("reenabling vsync for fb%d\n", mfd->index);
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON);
+		rc = ctl->ops.add_vsync_handler(ctl, &ctl->vsync_handler);
+		mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_OFF);
+	}
+
 	if (IS_ERR_VALUE(rc)) {
 		pr_err("Failed to turn on fb%d\n", mfd->index);
 		mdss_mdp_overlay_off(mfd);
@@ -6722,6 +6759,7 @@ int mdss_mdp_overlay_init(struct msm_fb_data_type *mfd)
 		}
 	}
 	mfd->mdp_sync_pt_data.async_wait_fences = true;
+	mdp5_data->vsync_en = false;
 
 	pm_runtime_set_suspended(&mfd->pdev->dev);
 	pm_runtime_enable(&mfd->pdev->dev);
@@ -6785,7 +6823,7 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 		struct mdp_scale_luts_info *lut_tbl)
 {
 	struct mdss_mdp_qseed3_lut_tbl *qseed3_lut_tbl;
-	int ret;
+	int ret = 0;
 
 	if (!mdata->scaler_off)
 		return -EFAULT;

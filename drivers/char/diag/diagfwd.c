@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -48,6 +48,13 @@
 #define STM_RSP_STATUS_INDEX		8
 #define STM_RSP_NUM_BYTES		9
 
+#define SMD_DRAIN_BUF_SIZE 4096
+/*++ 2015/07/14, USB Team, PCN00012 ++*/
+extern unsigned diag7k_debug_mask;
+extern unsigned diag9k_debug_mask;
+/*-- 2015/07/14, USB Team, PCN00012 --*/
+int diag_debug_buf_idx;
+unsigned char diag_debug_buf[1024];
 static int timestamp_switch;
 module_param(timestamp_switch, int, 0644);
 
@@ -155,6 +162,7 @@ int chk_apps_only(void)
 	case MSM_CPU_8627:
 	case MSM_CPU_9615:
 	case MSM_CPU_8974:
+	case MSM_CPU_8996:/*++ 2015/07/14, USB Team, PCN00012 ++*/
 		return 1;
 	default:
 		return 0;
@@ -216,7 +224,8 @@ void chk_logging_wakeup(void)
 		for (i = 0; i < driver->num_clients; i++) {
 			if (driver->client_map[i].pid != pid)
 				continue;
-			if (driver->data_ready[i] & USER_SPACE_DATA_TYPE)
+/*++ 2015/07/14, USB Team, PCN00012 ++*/
+			if (driver->data_ready[i] & USERMODE_DIAGFWD)
 				continue;
 			/*
 			 * At very high logging rates a race condition can
@@ -227,10 +236,12 @@ void chk_logging_wakeup(void)
 			 * situation.
 			 */
 			driver->data_ready[i] |= USER_SPACE_DATA_TYPE;
-			pr_debug("diag: Force wakeup of logging process\n");
+			atomic_inc(&driver->data_ready_notif[i]);
+			DIAG_DBUG("diag: Force wakeup of logging process\n");
 			wake_up_interruptible(&driver->wait_q);
 			break;
 		}
+/*-- 2015/07/14, USB Team, PCN00012 --*/
 		/*
 		 * Diag Memory Device is in normal. Check only for the first
 		 * index as all the indices point to the same session
@@ -456,8 +467,10 @@ void diag_update_userspace_clients(unsigned int type)
 
 	mutex_lock(&driver->diagchar_mutex);
 	for (i = 0; i < driver->num_clients; i++)
-		if (driver->client_map[i].pid != 0)
+		if (driver->client_map[i].pid != 0) {
 			driver->data_ready[i] |= type;
+			atomic_inc(&driver->data_ready_notif[i]);
+		}
 	wake_up_interruptible(&driver->wait_q);
 	mutex_unlock(&driver->diagchar_mutex);
 }
@@ -475,6 +488,8 @@ void diag_update_md_clients(unsigned int type)
 					driver->client_map[j].pid ==
 					driver->md_session_map[i]->pid) {
 					driver->data_ready[j] |= type;
+					atomic_inc(
+						&driver->data_ready_notif[j]);
 					break;
 				}
 			}
@@ -491,6 +506,7 @@ void diag_update_sleeping_process(int process_id, int data_type)
 	for (i = 0; i < driver->num_clients; i++)
 		if (driver->client_map[i].pid == process_id) {
 			driver->data_ready[i] |= data_type;
+			atomic_inc(&driver->data_ready_notif[i]);
 			break;
 		}
 	wake_up_interruptible(&driver->wait_q);
@@ -910,7 +926,7 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 	entry.cmd_code_lo = (uint16_t)(*(uint16_t *)temp);
 	temp += sizeof(uint16_t);
 
-	pr_debug("diag: In %s, received cmd %02x %02x %02x\n",
+	DIAGFWD_INFO("diag: In %s, received cmd %02x %02x %02x\n",
 		 __func__, entry.cmd_code, entry.subsys_id, entry.cmd_code_hi);
 
 	if (*buf == DIAG_CMD_LOG_ON_DMND && driver->log_on_demand_support &&
@@ -1102,7 +1118,7 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 		 * the tools. This is required since the tools is expecting a
 		 * HDLC encoded reponse for this request.
 		 */
-		pr_debug("diag: In %s, disabling HDLC encoding\n",
+		DIAGFWD_DBUG("diag: In %s, disabling HDLC encoding\n",
 		       __func__);
 		mutex_lock(&driver->md_session_lock);
 		info = diag_md_session_get_pid(pid);
@@ -1135,7 +1151,7 @@ void diag_process_hdlc_pkt(void *data, unsigned len, int pid)
 	}
 
 	mutex_lock(&driver->diag_hdlc_mutex);
-	pr_debug("diag: In %s, received packet of length: %d, req_buf_len: %d\n",
+	DIAGFWD_DBUG("diag: In %s, received packet of length: %d, req_buf_len: %d\n",
 		 __func__, len, driver->hdlc_buf_len);
 
 	if (driver->hdlc_buf_len >= DIAG_MAX_REQ_SIZE) {
@@ -1144,6 +1160,9 @@ void diag_process_hdlc_pkt(void *data, unsigned len, int pid)
 		goto fail;
 	}
 
+/*++ 2015/07/14, USB Team, PCN00012 ++*/
+	DIAGFWD_DBUG("HDLC decode fn, len of data  %d\n", len);
+/*-- 2015/07/14, USB Team, PCN00012 --*/
 	hdlc_decode->dest_ptr = driver->hdlc_buf + driver->hdlc_buf_len;
 	hdlc_decode->dest_size = DIAG_MAX_HDLC_BUF_SIZE - driver->hdlc_buf_len;
 	hdlc_decode->src_ptr = data;
@@ -1214,6 +1233,7 @@ static int diagfwd_mux_open(int id, int mode)
 
 	switch (mode) {
 	case DIAG_USB_MODE:
+		driver->qxdmusb_drop = 0;/*++ 2015/10/23, USB Team, PCN00026 ++*/
 		driver->usb_connected = 1;
 		break;
 	case DIAG_MEMORY_DEVICE_MODE:
@@ -1247,6 +1267,7 @@ static int diagfwd_mux_close(int id, int mode)
 
 	switch (mode) {
 	case DIAG_USB_MODE:
+		driver->qxdmusb_drop = 1;/*++ 2015/10/23, USB Team, PCN00026 ++*/
 		driver->usb_connected = 0;
 		break;
 	case DIAG_MEMORY_DEVICE_MODE:
@@ -1282,7 +1303,7 @@ static int diagfwd_mux_close(int id, int mode)
 			}
 		}
 		/* Re enable HDLC encoding */
-		pr_debug("diag: In %s, re-enabling HDLC encoding\n",
+		DIAGFWD_DBUG("diag: In %s, re-enabling HDLC encoding\n",
 		       __func__);
 		mutex_lock(&driver->hdlc_disable_mutex);
 		if (driver->md_session_mode == DIAG_MD_NONE)
@@ -1317,7 +1338,7 @@ static void hdlc_reset_timer_start(int pid)
 
 static void hdlc_reset_timer_func(unsigned long data)
 {
-	pr_debug("diag: In %s, re-enabling HDLC encoding\n",
+	DIAGFWD_DBUG("diag: In %s, re-enabling HDLC encoding\n",
 		       __func__);
 	if (hdlc_reset) {
 		driver->hdlc_disabled = 0;
@@ -1606,7 +1627,7 @@ int diagfwd_init(void)
 	for (i = 0; i < DIAG_NUM_PROC; i++)
 		driver->real_time_mode[i] = 1;
 	driver->supports_separate_cmdrsp = 1;
-	driver->supports_apps_hdlc_encoding = 1;
+	driver->supports_apps_hdlc_encoding = 0;/*++ 2015/07/14, USB Team, PCN00012 ++*/
 	mutex_init(&driver->diag_hdlc_mutex);
 	mutex_init(&driver->diag_cntl_mutex);
 	mutex_init(&driver->mode_lock);
@@ -1673,6 +1694,10 @@ int diagfwd_init(void)
 							, GFP_KERNEL)) == NULL)
 		goto err;
 	kmemleak_not_leak(driver->data_ready);
+
+	for (i = 0; i < THRESHOLD_CLIENT_LIMIT; i++)
+		atomic_set(&driver->data_ready_notif[i], 0);
+
 	if (driver->apps_req_buf == NULL) {
 		driver->apps_req_buf = kzalloc(DIAG_MAX_REQ_SIZE, GFP_KERNEL);
 		if (!driver->apps_req_buf)

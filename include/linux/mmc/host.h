@@ -12,7 +12,6 @@
 
 #include <linux/leds.h>
 #include <linux/mutex.h>
-#include <linux/timer.h>
 #include <linux/sched.h>
 #include <linux/device.h>
 #include <linux/devfreq.h>
@@ -24,6 +23,9 @@
 #include <linux/mmc/ring_buffer.h>
 
 #define MMC_AUTOSUSPEND_DELAY_MS	3000
+#define MMC_STATS_INTERVAL		5000	/* 5 secs */
+#define MMC_STATS_LOG_INTERVAL		60000	/* 60 secs */
+extern struct workqueue_struct *stats_workqueue;
 
 struct mmc_ios {
 	unsigned int	clock;			/* clock rate */
@@ -397,6 +399,10 @@ struct mmc_host {
 	u32			ocr_avail_sd;	/* SD-specific OCR */
 	u32			ocr_avail_mmc;	/* MMC-specific OCR */
 	struct notifier_block	pm_notify;
+#define MMC_DEBUG_MEMORY	0x01
+#define MMC_DEBUG_FREE_SPACE	0x02
+#define MMC_DEBUG_RANDOM_RW	0x04
+	unsigned int            debug_mask;
 	u32			max_current_330;
 	u32			max_current_300;
 	u32			max_current_180;
@@ -420,6 +426,7 @@ struct mmc_host {
 #define MMC_VDD_35_36		0x00800000	/* VDD voltage 3.5 ~ 3.6 */
 
 	u32			caps;		/* Host capabilities */
+	u32                     caps_uhs;       /* bake up Host capabilities for uhs*/
 
 #define MMC_CAP_4_BIT_DATA	(1 << 0)	/* Can the host do 4 bit transfers */
 #define MMC_CAP_MMC_HIGHSPEED	(1 << 1)	/* Can do MMC high-speed timing */
@@ -520,17 +527,19 @@ struct mmc_host {
 #ifdef CONFIG_MMC_DEBUG
 	unsigned int		removed:1;	/* host is being removed */
 #endif
-	unsigned int		can_retune:1;	/* re-tuning can be used */
-	unsigned int		doing_retune:1;	/* re-tuning in progress */
-	unsigned int		retune_now:1;	/* do re-tuning at next req */
+	unsigned int		can_retune:1;   /* re-tuning can be used */
+	unsigned int		doing_retune:1; /* re-tuning in progress */
+	unsigned int		retune_now:1;   /* do re-tuning at next req */
 
 	int			rescan_disable;	/* disable card detection */
 	int			rescan_entered;	/* used with nonremovable devices */
 
-	int			need_retune;	/* re-tuning is needed */
-	int			hold_retune;	/* hold off re-tuning */
-	unsigned int		retune_period;	/* re-tuning period in secs */
-	struct timer_list	retune_timer;	/* for periodic re-tuning */
+  int			need_retune;    /* re-tuning is needed */
+  int			hold_retune;    /* hold off re-tuning */
+  unsigned int				retune_period;  /* re-tuning period in secs */
+  struct timer_list		retune_timer;   /* for periodic re-tuning */
+	
+	int			retry_disable;	/* disable retry error handling */
 
 	bool			trigger_card_event; /* card_event necessary */
 
@@ -542,6 +551,8 @@ struct mmc_host {
 	int			claim_cnt;	/* "claim" nesting count */
 
 	struct delayed_work	detect;
+	struct delayed_work	enable_detect;
+	struct delayed_work	stats_work;
 	int			detect_change;	/* card detect flag */
 	struct mmc_slot		slot;
 
@@ -599,18 +610,50 @@ struct mmc_host {
 	 * actually disabling the clock from it's source.
 	 */
 	bool			card_clock_off;
+	unsigned int            crc_count;
+	unsigned int            removed_cnt;
+	unsigned int		sd_debounce_in;
+	unsigned int		sd_debounce_out;
 
-#ifdef CONFIG_MMC_PERF_PROFILING
 	struct {
 
 		unsigned long rbytes_drv;  /* Rd bytes MMC Host  */
 		unsigned long wbytes_drv;  /* Wr bytes MMC Host  */
 		ktime_t rtime_drv;	   /* Rd time  MMC Host  */
 		ktime_t wtime_drv;	   /* Wr time  MMC Host  */
+
+		unsigned long rcount;		/* Rd req count */
+		unsigned long wcount;		/* Wr req count */
+
+		/* random r/w */
+		unsigned long rbytes_drv_rand;	/* Rd bytes MMC Host  */
+		unsigned long wbytes_drv_rand;	/* Wr bytes MMC Host  */
+		unsigned long rcount_rand;	/* Rd req count */
+		unsigned long wcount_rand;	/* Wr req count */
+		ktime_t rtime_drv_rand;		/* Rd time  MMC Host  */
+		ktime_t wtime_drv_rand;		/* Wr time  MMC Host  */
+		unsigned long wbytes_low_perf;
+		unsigned long wtime_low_perf;
+		unsigned long lp_duration;	/* low performance duration */
+
+		/* erase command */
+		unsigned long erase_rq;		/* erase req count */
+		unsigned long erase_blks;	/* total erase blocks */
+		ktime_t erase_time;		/* total erase time */
+
+		/* workload */
+		unsigned long wkbytes_drv;
+		ktime_t workload_time;
+
 		ktime_t start;
+
+		/* CMDQ */
+		unsigned long cmdq_read_map;
+		unsigned long cmdq_write_map;
+		ktime_t cmdq_read_start;
+		ktime_t cmdq_write_start;
 	} perf;
 	bool perf_enable;
-#endif
 	struct mmc_trace_buffer trace_buf;
 	enum dev_state dev_status;
 	bool			wakeup_on_idle;
@@ -689,6 +732,9 @@ static inline void mmc_signal_sdio_irq(struct mmc_host *host)
 }
 
 void sdio_run_irqs(struct mmc_host *host);
+
+int mmc_is_sd_host(struct mmc_host *mmc);
+int mmc_is_mmc_host(struct mmc_host *mmc);
 
 #ifdef CONFIG_REGULATOR
 int mmc_regulator_get_ocrmask(struct regulator *supply);

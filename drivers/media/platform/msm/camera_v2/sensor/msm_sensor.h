@@ -31,8 +31,8 @@
 #include <media/msm_cam_sensor.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-ioctl.h>
-#include "msm_camera_i2c.h"
-#include "msm_camera_dt_util.h"
+#include "io/msm_camera_i2c.h"
+#include "io/msm_camera_dt_util.h"
 #include "msm_sd.h"
 
 #define DEFINE_MSM_MUTEX(mutexname) \
@@ -61,6 +61,12 @@ struct msm_sensor_fn_t {
 	int (*sensor_power_down)(struct msm_sensor_ctrl_t *);
 	int (*sensor_power_up)(struct msm_sensor_ctrl_t *);
 	int (*sensor_match_id)(struct msm_sensor_ctrl_t *);
+/*HTC_START, HTC_VCM*/
+   int (*sensor_i2c_read_fuseid)(struct sensorb_cfg_data *cdata, struct msm_sensor_ctrl_t *s_ctrl); /*HTC Harvey 20130628 - Porting read OTP*/
+#ifdef CONFIG_COMPAT
+	int (*sensor_i2c_read_fuseid32)(struct sensorb_cfg_data32 *cdata, struct msm_sensor_ctrl_t *s_ctrl); /*HTC Harvey 20130628 - Porting read OTP*/
+#endif
+/*HTC_END, HTC_VCM*/
 };
 
 struct msm_sensor_ctrl_t {
@@ -92,6 +98,11 @@ struct msm_sensor_ctrl_t {
 	uint8_t bypass_video_node_creation;
 };
 
+#ifdef CONFIG_OIS_CALIBRATION
+/*HTC_START*/
+int htc_ois_calibration(struct msm_sensor_ctrl_t *s_ctrl, int cam_id);
+/*HTC_END*/
+#endif
 int msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp);
 
 int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl);
@@ -124,4 +135,7 @@ long msm_sensor_subdev_fops_ioctl(struct file *file,
 	unsigned int cmd,
 	unsigned long arg);
 #endif
+//HTC_START
+int msm_sensor_get_engid(u8 *engid);
+//HTC_END
 #endif

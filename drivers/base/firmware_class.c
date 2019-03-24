@@ -297,7 +297,7 @@ static void fw_free_buf(struct firmware_buf *buf)
 
 /* direct firmware loading support */
 static char fw_path_para[256];
-static const char * const fw_path[] = {
+static char *fw_path[32] = {
 	fw_path_para,
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
@@ -305,6 +305,13 @@ static const char * const fw_path[] = {
 	"/lib/firmware",
 	"/lib64/firmware",
 	"/lib/firmware/image"
+//++ Modem BSP
+        /* QCT moved /firmware/image to uevnetd in O80
+           We added back to WA UMTS radio not be loaded as default*/
+	,"/firmware/image"
+        /* Support dynamic modem image switch */
+        ,"/firmware/cradio"
+//-- Modem BSP
 };
 
 /*
@@ -314,6 +321,8 @@ static const char * const fw_path[] = {
  */
 module_param_string(path, fw_path_para, sizeof(fw_path_para), 0644);
 MODULE_PARM_DESC(path, "customized firmware image search path with a higher priority than default path");
+
+module_param_array(fw_path, charp, NULL, 0644);
 
 static int fw_read_file_contents(struct file *file, struct firmware_buf *fw_buf)
 {
@@ -365,15 +374,48 @@ static int fw_get_filesystem_firmware(struct device *device,
 	int i;
 	int rc = -ENOENT;
 	char *path = __getname();
+
+        //++ Modem BSP, support dynamic modem image switch
+        const char* radio_image_select_path = "/dev/block/bootdevice/by-name/fsc";
+        //const char* radio_image_select_path = "dev/block/mmcblk0p45";
+        const int fsc_offset = 532; // 512+20 Byte
+        static char radio_image_info[4] = "";
+        static bool is_first = true;
+        struct file *fsc_file;
+        //-- Modem BSP
+
 	if (!path)
 		return false;
 
+        //++ Modem BSP, support dynamic modem image switch
+        if (!strncmp( buf->fw_id, "modem", 5)) {
+          if ( is_first ) {
+            fsc_file = filp_open( radio_image_select_path, O_RDONLY, 0);
+            if ( !IS_ERR(fsc_file) ) {
+              kernel_read( fsc_file, fsc_offset, radio_image_info, 4*sizeof(char) );
+              filp_close( fsc_file, NULL );
+            }
+            else {
+              dev_err(device,"firmware: fsc_file open fail, err value = %d\n", IS_ERR(fsc_file));
+            }
+            is_first = false;
+          }
+        }
+        //-- Modem BSP
 	for (i = 0; i < ARRAY_SIZE(fw_path); i++) {
 		struct file *file;
 
 		/* skip the unset customized path */
-		if (!fw_path[i][0])
+		if (!fw_path[i] || !fw_path[i][0])
 			continue;
+
+                //++ Modem BSP, support dynamic modem image switch
+                if ( !strcmp( radio_image_info, "CDMA" ) && !strcmp( fw_path[i], "/firmware/image" )
+                  && ( !strncmp( buf->fw_id, "modem", 5 ) || !strncmp( buf->fw_id, "mba", 3 ) || !strncmp( buf->fw_id, "msadp", 5)) ) {
+                    dev_err(device,"firmware: look up FW device: %s, radio select = %s, skip path = %s\n", buf->fw_id, radio_image_info, fw_path[i]);
+                    continue;
+                  }
+                //-- Modem BSP
 
 		snprintf(path, PATH_MAX, "%s/%s", fw_path[i], buf->fw_id);
 
@@ -1289,6 +1331,12 @@ static int _request_firmware(struct fw_desc *desc)
 
 	ret = 0;
 	timeout = firmware_loading_timeout();
+
+        #if 1 //Modem_BSP: reduce timeout to 1s
+        if (loading_timeout > 0 && !strncmp(desc->name, "msadp", 5))
+          timeout = 1 * HZ; //1s        
+        #endif //Modem_BSP:
+
 	if (desc->opt_flags & FW_OPT_NOWAIT) {
 		timeout = usermodehelper_read_lock_wait(timeout);
 		if (!timeout) {

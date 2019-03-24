@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,9 +22,12 @@
 #include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/wakelock.h>
+#include <linux/usb/usbdiag.h>	/* 2015/07/14, USB Team, PCN00012 */
 #include <soc/qcom/smd.h>
 #include <asm/atomic.h>
 #include "diagfwd_bridge.h"
+
+#define THRESHOLD_CLIENT_LIMIT	50
 
 /* Size of the USB buffers used for read and write*/
 #define USB_MAX_OUT_BUF 4096
@@ -253,6 +256,10 @@
 enum remote_procs {
 	MDM = 1,
 	MDM2 = 2,
+/*++ 2015/07/14, USB Team, PCN00012 ++*/
+	MDM3 = 3,
+	MDM4 = 4,
+/*-- 2015/07/14, USB Team, PCN00012 --*/
 	QSC = 5,
 };
 
@@ -324,6 +331,7 @@ struct diag_cmd_reg_tbl_t {
 struct diag_client_map {
 	char name[20];
 	int pid;
+	int timeout;/*++ 2015/07/14, USB Team, PCN00012 ++*/
 };
 
 struct real_time_vote_t {
@@ -475,6 +483,7 @@ struct diagchar_dev {
 	wait_queue_head_t wait_q;
 	struct diag_client_map *client_map;
 	int *data_ready;
+	atomic_t data_ready_notif[THRESHOLD_CLIENT_LIMIT];
 	int num_clients;
 	int polling_reg_flag;
 	int use_device_tree;
@@ -558,6 +567,16 @@ struct diagchar_dev {
 	struct mutex real_time_mutex;
 	struct work_struct diag_real_time_work;
 	struct workqueue_struct *diag_real_time_wq;
+/*++ 2015/10/23, USB Team, PCN00026 ++*/
+#if DIAG_XPST
+	unsigned char nohdlc;
+	unsigned char in_busy_dmrounter;
+	struct mutex smd_lock;
+	unsigned char init_done;
+	unsigned char is2ARM11;
+	int debug_dmbytes_recv;
+#endif
+/*-- 2015/10/23, USB Team, PCN00026 --*/
 #ifdef CONFIG_DIAG_OVER_USB
 	int usb_connected;
 #endif
@@ -582,6 +601,13 @@ struct diagchar_dev {
 	/* Power related variables */
 	struct diag_ws_ref_t dci_ws;
 	struct diag_ws_ref_t md_ws;
+	spinlock_t ws_lock;
+/*++ 2015/07/14, USB Team, PCN00012 ++*/
+	int qxdm2sd_drop;
+	int qxdmusb_drop;
+	struct timeval st0;
+	struct timeval st1;
+/*-- 2015/07/14, USB Team, PCN00012 --*/
 	/* Pointers to Diag Masks */
 	struct diag_mask_info *msg_mask;
 	struct diag_mask_info *log_mask;
@@ -607,10 +633,25 @@ struct diagchar_dev {
 };
 
 extern struct diagchar_dev *driver;
-
+/*++ 2015/07/14, USB Team, PCN00012 ++*/
+#define DIAG_DBG_READ  1
+#define DIAG_DBG_WRITE 2
+#define DIAG_DBG_DROP  3
+extern unsigned diag7k_debug_mask;
+extern unsigned diag9k_debug_mask;
+#define DIAGFWD_7K_RAWDATA(buf, src, flag) \
+	__diagfwd_dbg_raw_data(buf, src, flag, diag7k_debug_mask)
+#define DIAGFWD_9K_RAWDATA(buf, src, flag) \
+	__diagfwd_dbg_raw_data(buf, src, flag, diag9k_debug_mask)
+void __diagfwd_dbg_raw_data(void *buf, const char *src, unsigned dbg_flag, unsigned mask);
+/*-- 2015/07/14, USB Team, PCN00012 --*/
 extern int wrap_enabled;
 extern uint16_t wrap_count;
 
+/*++ 2015/10/23, USB Team, PCN00026 ++*/
+#define    SMDDIAG_NAME "DIAG"
+extern struct diagchar_dev *driver;
+/*-- 2015/10/23, USB Team, PCN00026 --*/
 void diag_get_timestamp(char *time_str);
 void check_drain_timer(void);
 int diag_get_remote(int remote_info);

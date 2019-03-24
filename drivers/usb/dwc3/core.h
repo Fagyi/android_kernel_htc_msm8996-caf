@@ -995,6 +995,14 @@ struct dwc3 {
 	unsigned long		l1_remote_wakeup_cnt;
 
 	wait_queue_head_t	wait_linkstate;
+	/*++ 2015/10/13, USB Team, PCN00022 ++*/
+	bool usb_disable;
+	struct work_struct disable_work;
+	void	(*notify_usb_disabled)(void);
+	/*-- 2015/10/13, USB Team, PCN00022 --*/
+	/*++ 2015/12/22, USB Team, PCN00050 ++*/
+	int		max_speed_backup;
+	/*-- 2015/12/22, USB Team, PCN00050 --*/
 	void			*dwc_ipc_log_ctxt;
 	int			last_fifo_depth;
 };

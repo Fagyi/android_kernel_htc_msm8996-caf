@@ -31,7 +31,8 @@ Example:
 qcom,lmh {
 	compatible = "qcom,lmh";
 	interrupts = <0 332 4>;
-	reg = <0xF9117000 0x4>;
+	reg-names = "lmh_interrupt_status", "lmh_odcm";
+	reg = <0xF9117000 0x4>, <0x09981030 0xFFFFF>;
 	qcom,lmh-trim-err-offset = <18>;
 	vdd-apss-supply = <&pm8994_s11>;
 	qcom,lmh-odcm-disable-threshold-mA = <850>;

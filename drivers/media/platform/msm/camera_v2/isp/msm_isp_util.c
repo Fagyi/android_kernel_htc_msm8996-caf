@@ -2164,8 +2164,8 @@ void msm_isp_do_tasklet(unsigned long data)
 			irq_status0, irq_status1);
 		if (atomic_read(&vfe_dev->error_info.overflow_state)
 			!= NO_OVERFLOW) {
-			ISP_DBG("%s: Recovery in processing, Ignore IRQs!!!\n",
-				__func__);
+                        pr_err("%s: overflow_state:%d, Recovery in processing, Ignore IRQs!!!\n",
+                                __func__, atomic_read(&vfe_dev->error_info.overflow_state));
 			continue;
 		}
 		msm_isp_process_error_info(vfe_dev);

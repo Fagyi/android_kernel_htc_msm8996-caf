@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,7 +23,7 @@
 	(config_val >= min) && (config_val <= max))
 
 #undef CDBG
-#define CDBG(fmt, args...) pr_debug(fmt, ##args)
+#define CDBG(fmt, args...) pr_debug("[CAM]"fmt, ##args)
 
 int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 	int num_vreg, struct msm_sensor_power_setting *power_setting,
@@ -781,90 +781,6 @@ ERROR1:
 	gconf->cam_gpio_req_tbl_size = 0;
 	return rc;
 }
-int msm_camera_get_dt_gpio_set_tbl(struct device_node *of_node,
-	struct msm_camera_gpio_conf *gconf, uint16_t *gpio_array,
-	uint16_t gpio_array_size)
-{
-	int rc = 0, i = 0;
-	uint32_t count = 0;
-	uint32_t *val_array = NULL;
-
-	rc = of_property_read_u32(of_node, "qcom,gpio-set-tbl-num", &count);
-	if (rc < 0) {
-		pr_err("%s failed %d\n", __func__, __LINE__);
-		return 0;
-	}
-
-	count /= sizeof(uint32_t);
-	if (!count) {
-		pr_err("%s qcom,gpio-set-tbl-num 0\n", __func__);
-		return 0;
-	}
-
-	val_array = kzalloc((sizeof(uint32_t) * count), GFP_KERNEL);
-	if (!val_array)
-		return -ENOMEM;
-
-	gconf->cam_gpio_set_tbl = kzalloc(sizeof(struct msm_gpio_set_tbl) *
-		count, GFP_KERNEL);
-	if (!gconf->cam_gpio_set_tbl) {
-		rc = -ENOMEM;
-		goto ERROR1;
-	}
-	gconf->cam_gpio_set_tbl_size = count;
-
-	rc = of_property_read_u32_array(of_node, "qcom,gpio-set-tbl-num",
-		val_array, count);
-	if (rc < 0) {
-		pr_err("%s failed %d\n", __func__, __LINE__);
-		goto ERROR2;
-	}
-	for (i = 0; i < count; i++) {
-		if (val_array[i] >= gpio_array_size) {
-			pr_err("%s gpio set tbl index %d invalid\n",
-				__func__, val_array[i]);
-			return -EINVAL;
-		}
-		gconf->cam_gpio_set_tbl[i].gpio = gpio_array[val_array[i]];
-		CDBG("%s cam_gpio_set_tbl[%d].gpio = %d\n", __func__, i,
-			gconf->cam_gpio_set_tbl[i].gpio);
-	}
-
-	rc = of_property_read_u32_array(of_node, "qcom,gpio-set-tbl-flags",
-		val_array, count);
-	if (rc < 0) {
-		pr_err("%s failed %d\n", __func__, __LINE__);
-		goto ERROR2;
-	}
-	for (i = 0; i < count; i++) {
-		gconf->cam_gpio_set_tbl[i].flags = val_array[i];
-		CDBG("%s cam_gpio_set_tbl[%d].flags = %ld\n", __func__, i,
-			gconf->cam_gpio_set_tbl[i].flags);
-	}
-
-	rc = of_property_read_u32_array(of_node, "qcom,gpio-set-tbl-delay",
-		val_array, count);
-	if (rc < 0) {
-		pr_err("%s failed %d\n", __func__, __LINE__);
-		goto ERROR2;
-	}
-	for (i = 0; i < count; i++) {
-		gconf->cam_gpio_set_tbl[i].delay = val_array[i];
-		CDBG("%s cam_gpio_set_tbl[%d].delay = %d\n", __func__, i,
-			gconf->cam_gpio_set_tbl[i].delay);
-	}
-
-	kfree(val_array);
-	return rc;
-
-ERROR2:
-	kfree(gconf->cam_gpio_set_tbl);
-ERROR1:
-	kfree(val_array);
-	gconf->cam_gpio_set_tbl_size = 0;
-	return rc;
-}
-
 int msm_camera_init_gpio_pin_tbl(struct device_node *of_node,
 	struct msm_camera_gpio_conf *gconf, uint16_t *gpio_array,
 	uint16_t gpio_array_size)
@@ -1471,19 +1387,11 @@ int32_t msm_sensor_driver_get_gpio_data(
 		gpio_array[i] = of_get_gpio(of_node, i);
 		CDBG("gpio_array[%d] = %d", i, gpio_array[i]);
 	}
-
 	rc = msm_camera_get_dt_gpio_req_tbl(of_node, gconf, gpio_array,
 		gpio_array_size);
 	if (rc < 0) {
 		pr_err("failed in msm_camera_get_dt_gpio_req_tbl\n");
 		goto FREE_GPIO_CONF;
-	}
-
-	rc = msm_camera_get_dt_gpio_set_tbl(of_node, gconf,
-		gpio_array, gpio_array_size);
-	if (rc < 0) {
-		pr_err("%s failed %d\n", __func__, __LINE__);
-		goto FREE_GPIO_REQ_TBL;
 	}
 
 	rc = msm_camera_init_gpio_pin_tbl(of_node, gconf, gpio_array,
@@ -1494,6 +1402,7 @@ int32_t msm_sensor_driver_get_gpio_data(
 	}
 	kfree(gpio_array);
 	return rc;
+
 FREE_GPIO_REQ_TBL:
 	kfree(gconf->cam_gpio_req_tbl);
 FREE_GPIO_CONF:
@@ -1509,7 +1418,7 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 {
 	int rc = 0, index = 0, no_gpio = 0, ret = 0;
 	struct msm_sensor_power_setting *power_setting = NULL;
-
+	pr_info("[CAM]%s: +\n", __func__); //HTC_ADD
 	CDBG("%s:%d\n", __func__, __LINE__);
 	if (!ctrl || !sensor_i2c_client) {
 		pr_err("failed ctrl %pK sensor_i2c_client %pK\n", ctrl,
@@ -1642,6 +1551,7 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 		}
 	}
 	CDBG("%s exit\n", __func__);
+	pr_info("[CAM]%s: -\n", __func__); //HTC_ADD
 	return 0;
 power_up_failed:
 	pr_err("%s:%d failed\n", __func__, __LINE__);
@@ -1734,7 +1644,7 @@ int msm_camera_power_down(struct msm_camera_power_ctrl_t *ctrl,
 	int index = 0, ret = 0;
 	struct msm_sensor_power_setting *pd = NULL;
 	struct msm_sensor_power_setting *ps;
-
+	pr_info("[CAM]%s: +\n", __func__); //HTC_ADD
 	CDBG("%s:%d\n", __func__, __LINE__);
 	if (!ctrl || !sensor_i2c_client) {
 		pr_err("failed ctrl %pK sensor_i2c_client %pK\n", ctrl,
@@ -1835,6 +1745,7 @@ int msm_camera_power_down(struct msm_camera_power_ctrl_t *ctrl,
 		ctrl->gpio_conf->cam_gpio_req_tbl,
 		ctrl->gpio_conf->cam_gpio_req_tbl_size, 0);
 	CDBG("%s exit\n", __func__);
+	pr_info("[CAM]%s: -\n", __func__); //HTC_ADD
 	return 0;
 }
 

@@ -934,6 +934,8 @@ static int dwc3_probe(struct platform_device *pdev)
 	if (dwc->maximum_speed == USB_SPEED_UNKNOWN)
 		dwc->maximum_speed = USB_SPEED_SUPER;
 
+	dwc->max_speed_backup = dwc->maximum_speed; /* 2015/12/22, USB Team, PCN00050 */
+
 	dwc->lpm_nyet_threshold = lpm_nyet_threshold;
 
 	dwc->hird_threshold = hird_threshold

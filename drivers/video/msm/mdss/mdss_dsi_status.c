@@ -25,6 +25,9 @@
 #include <linux/string.h>
 #include <linux/sysfs.h>
 #include <linux/interrupt.h>
+#ifdef CONFIG_TOUCHSCREEN_SIW
+#include <linux/input/siw_touch_notify.h>
+#endif
 
 #include "mdss_fb.h"
 #include "mdss_dsi.h"
@@ -51,7 +54,6 @@ static void check_dsi_ctrl_status(struct work_struct *work)
 
 	pdsi_status = container_of(to_delayed_work(work),
 		struct dsi_status_data, check_status);
-
 	if (!pdsi_status) {
 		pr_err("%s: DSI status data not available\n", __func__);
 		return;
@@ -84,33 +86,27 @@ irqreturn_t hw_vsync_handler(int irq, void *data)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata =
 			(struct mdss_dsi_ctrl_pdata *)data;
+
 	if (!ctrl_pdata) {
 		pr_err("%s: DSI ctrl not available\n", __func__);
 		return IRQ_HANDLED;
 	}
 
-	if (pstatus_data)
-		mod_delayed_work(system_wq, &pstatus_data->check_status,
-			msecs_to_jiffies(interval));
-	else
+	if (pstatus_data) {
+		if (ctrl_pdata->status_mode == ESD_TE) {
+			pr_info("%s: count=%d\n", __func__, atomic_read(&ctrl_pdata->te_irq_ready));
+			mod_delayed_work(system_wq, &pstatus_data->check_status,
+				msecs_to_jiffies(interval));
+		}
+	} else
 		pr_err("Pstatus data is NULL\n");
 
-	if (!atomic_read(&ctrl_pdata->te_irq_ready)) {
+	atomic_inc(&ctrl_pdata->te_irq_ready);
+	if (atomic_read(&ctrl_pdata->te_irq_ready) >= 3)
 		complete_all(&ctrl_pdata->te_irq_comp);
-		atomic_inc(&ctrl_pdata->te_irq_ready);
-	}
+
 
 	return IRQ_HANDLED;
-}
-
-/*
- * disable_esd_thread() - Cancels work item for the esd check.
- */
-void disable_esd_thread(void)
-{
-	if (pstatus_data &&
-		cancel_delayed_work_sync(&pstatus_data->check_status))
-			pr_debug("esd thread killed\n");
 }
 
 /*
@@ -166,16 +162,15 @@ static int fb_event_callback(struct notifier_block *self,
 	}
 
 	pdata->mfd = evdata->info->par;
+
 	if (event == FB_EVENT_BLANK) {
 		int *blank = evdata->data;
-		struct dsi_status_data *pdata = container_of(self,
-				struct dsi_status_data, fb_notifier);
-		pdata->mfd = evdata->info->par;
 
 		switch (*blank) {
 		case FB_BLANK_UNBLANK:
+			pdata->vendor_esd_error = false;
 			schedule_delayed_work(&pdata->check_status,
-				msecs_to_jiffies(interval));
+				msecs_to_jiffies(1000));
 			break;
 		case FB_BLANK_VSYNC_SUSPEND:
 		case FB_BLANK_NORMAL:
@@ -189,9 +184,33 @@ static int fb_event_callback(struct notifier_block *self,
 			pr_err("Unknown case in FB_EVENT_BLANK event\n");
 			break;
 		}
+		pr_info("%s: fb%d, event=%lu, blank=%d\n", __func__, mfd->index, event, *blank);
 	}
 	return 0;
 }
+
+#ifdef CONFIG_TOUCHSCREEN_SIW
+static int mdss_siw_event_callback(struct notifier_block *self,
+	unsigned long event, void *data)
+{
+	struct dsi_status_data *pdata = container_of(self,
+				struct dsi_status_data, vendor_notifier);
+	struct msm_fb_data_type *mfd = pdata->mfd;
+
+	pr_info("%s: mfd=%p, event=%lu\n", __func__, mfd, event);
+	if (mfd && mfd->index == 0) {
+		switch (event) {
+		case LCD_EVENT_TOUCH_ESD_DETECTED:
+			pdata->vendor_esd_error = true;
+			schedule_delayed_work(&pdata->check_status,
+				msecs_to_jiffies(50));
+		break;
+		}
+	}
+
+	return 0;
+}
+#endif
 
 static int param_dsi_status_disable(const char *val, struct kernel_param *kp)
 {
@@ -259,6 +278,12 @@ int __init mdss_dsi_status_init(void)
 		return -EPERM;
 	}
 
+#ifdef CONFIG_TOUCHSCREEN_SIW
+	pstatus_data->vendor_notifier.notifier_call = mdss_siw_event_callback;
+	if (siw_touch_atomic_notifier_register(&pstatus_data->vendor_notifier) != 0)
+		pr_err("Failed to register callback\n");
+#endif
+
 	pr_info("%s: DSI status check interval:%d\n", __func__,	interval);
 
 	INIT_DELAYED_WORK(&pstatus_data->check_status, check_dsi_ctrl_status);
@@ -270,6 +295,9 @@ int __init mdss_dsi_status_init(void)
 
 void __exit mdss_dsi_status_exit(void)
 {
+#ifdef CONFIG_TOUCHSCREEN_SIW
+	siw_touch_atomic_notifier_unregister(&pstatus_data->vendor_notifier);
+#endif
 	fb_unregister_client(&pstatus_data->fb_notifier);
 	cancel_delayed_work_sync(&pstatus_data->check_status);
 	kfree(pstatus_data);

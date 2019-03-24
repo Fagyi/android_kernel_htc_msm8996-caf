@@ -191,6 +191,7 @@ Optional properties:
 					"bl_ctrl_pwm" = Backlight controlled by PWM gpio.
 					"bl_ctrl_wled" = Backlight controlled by WLED.
 					"bl_ctrl_dcs" = Backlight controlled by DCS commands.
+					"bl_ctrl_backlight" = Backlight controlled by backlight device.
 					other: Unknown backlight control. (default)
 - qcom,mdss-dsi-bl-pwm-pmi:		Boolean to indicate that PWM control is through second pmic chip.
 - qcom,mdss-dsi-bl-pmic-bank-select:	LPG channel for backlight.
@@ -380,6 +381,7 @@ Optional properties:
 					10000.
 - qcom,mdss-dsi-lp11-init:		Boolean used to enable the DSI clocks and data lanes (low power 11)
 					before issuing hardware reset line.
+- htc,mdss-dsi-lp11-init-delay-us:	Delay in microseconds(us) after DSI entering lp11 mode.
 - qcom,mdss-dsi-init-delay-us:		Delay in microseconds(us) before performing any DSI activity in lp11
 					mode. This master delay (t_init_delay as per DSI spec) should be sum
 					of DSI internal delay to reach fuctional after power up and minimum
@@ -477,6 +479,9 @@ Optional properties:
 					in floating state(not LP00 or LP11) to turn on this property. Software
 					turns off PHY pmic power supply, phy ldo and DSI Lane ldo during
 					idle screen (footswitch control off) when this property is enabled.
+
+- htc,panel-aod-config: 		Optional property to select default Always-On Dispaly configuration.
+
 [[Optional config sub-nodes]]		These subnodes provide different configurations for a given same panel.
 					Default configuration can be chosen by specifying phandle of the
 					selected subnode in the qcom,config-select.
@@ -532,6 +537,42 @@ Optional properites:
 - qcom,mdss-dsi-post-init-delay:        Specifies required number of frames to wait so that panel can be functional
 					to show proper display.
 
+- htc,brt-bl-table:			An array that specifies the backlight 1.0 bl and brightness
+					transform table.
+					Each set will have the format defined as below:
+					--> brightness level:[0,255]
+					--> bl level:(IC PWM)[0,255] or (PMIC WLED)[0,4095]
+
+- htc,brt-bl-table2:			Same as htc,brt-bl-table for secondary backlgiht control.
+
+- htc,mdss-camera-blk:		Specifies the brightness of camera
+
+- htc,cabc-ui-cmds:			A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+
+- htc,cabc-video-cmds:		A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+
+- htc,cabc-off-cmds:		A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+
+- htc,color-temp-cmds:		A node lists the color temperature setting that base on
+					qcom dsi controller protocol.
+- htc,color-default-cmds:	A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+- htc,color-srgb-cmds:		A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+
+- htc,burst-on-cmds:		A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+- htc,burst-off-cmds:		A byte stream formed by multiple dcs packets base on
+					qcom dsi controller protocol.
+- htc,burst-bl-value		An integer value indicated the burst bl value.
+
+- htc,mdss-dsi-bl-backlight	Specifies primary backlight device node when "bl_ctrl_backlight" was used.
+- htc,mdss-dsi-bl-backlight2	Specifies secondary backlight device node when "bl_ctrl_backlight" was used.
+- htc,mdss-dsi-on-fixup-command Specifies available fixup registers of qcom,mdss-dsi-on-command.
+
 Additional properties added to the second level nodes that represent timings properties:
 - qcom,mdss-dsi-timing-default:		Property that specifies the current child as the default
 					timing configuration that will be used.
@@ -542,6 +583,13 @@ Additional properties added to the second level nodes that represent timings pro
 					commands.
 					"dsi_lp_mode" = DSI low power mode (default)
 					"dsi_hs_mode" = DSI high speed mode
+
+- htc,dsi_panel_power_control:		String that specifies customized panel power control.
+					"hx8396c2" => Used for HX8396C workaround
+- htc,panel-supply-entries-stage2:	A node that lists the elements of the supply used to provide
+					power to DSI panel after dsi channel and reset pin ready.
+					It usualy would be rest supplies of qcom,panel-supply-entries.
+- htc,panel-calibration-data-format:An integer value indicates the panel calibration data format.
 
 Note, if a given optional qcom,* binding is not present, then the driver will configure
 the default values specified.

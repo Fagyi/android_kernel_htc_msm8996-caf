@@ -291,6 +291,7 @@
 		mdss_fb0: qcom,mdss_fb_primary {
 			cell-index = <0>;
 			compatible = "qcom,mdss-fb";
+			memory-region = <&cont_splash_mem>;
 			qcom,cont-splash-memory {
 				linux,contiguous-region = <&cont_splash_mem>;
 			};
@@ -434,7 +435,6 @@
 				"pll_shadow_byte_clk_src",
 				"pll_shadow_pixel_clk_src";
 
-			qcom,null-insertion-enabled;
 			qcom,platform-strength-ctrl = [ff 06
 							ff 06
 							ff 06
@@ -486,7 +486,6 @@
 				"pll_shadow_byte_clk_src",
 				"pll_shadow_pixel_clk_src";
 
-			qcom,null-insertion-enabled;
 			qcom,platform-strength-ctrl = [ff 06
 							ff 06
 							ff 06
@@ -534,7 +533,7 @@
 		clock-names = "mdp_core_clk", "iface_clk",
 				"core_clk", "alt_iface_clk", "extp_clk";
 
-		qcom,hdmi-tx-hpd = <&pm8994_mpps 4 0>;
+		qcom,hdmi-tx-hpd = <&tlmm 34 0>;
 		qcom,mdss-fb-map = <&mdss_fb2>;
 		qcom,pluggable;
 

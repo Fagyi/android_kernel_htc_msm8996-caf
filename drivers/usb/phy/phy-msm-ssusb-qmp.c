@@ -39,6 +39,9 @@ enum core_ldo_levels {
 #define USB_SSPHY_1P8_VOL_MAX		1800000 /* uV */
 #define USB_SSPHY_HPM_LOAD		23000	/* uA */
 
+#define USB3_QSERDES_TX_EMP_POST1_LVL 0x218
+#define USB3_QSERDES_TX_DRV_LVL 0x22C
+
 /* USB3PHY_PCIE_USB3_PCS_PCS_STATUS bit */
 #define PHYSTATUS				BIT(6)
 
@@ -49,6 +52,14 @@ enum core_ldo_levels {
 #define ARCVR_DTCT_EN		BIT(0)
 #define ALFPS_DTCT_EN		BIT(1)
 #define ARCVR_DTCT_EVENT_SEL	BIT(4)
+
+unsigned int tx_drv;
+module_param(tx_drv, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(tx_drv, "QMP SSUSB PHY TX DRV");
+
+unsigned int tx_emp;
+module_param(tx_emp, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(tx_emp, "QMP SSUSB PHY TX EMP");
 
 enum qmp_phy_rev_reg {
 	USB3_REVISION_ID0,
@@ -272,6 +283,8 @@ static const struct qmp_reg_val qmp_settings_rev2[] = {
 	{0x51C, 0x16}, /* QSERDES_RX_SIGDET_DEGLITCH_CNTRL */
 
 	/* TX settings */
+	{0x218, 0x0F}, /* QSERDES_TX_EMP_POST1_LVL */
+	{0x22C, 0x01}, /* QSERDES_TX_DRV_LVL */
 	{0x268, 0x45}, /* QSERDES_TX_HIGHZ_TRANSCEIVEREN_BIAS_DRVR_EN */
 	{0x2AC, 0x12}, /* QSERDES_TX_RCV_DETECT_LVL_2 */
 	{0x294, 0x06}, /* QSERDES_TX_LANE_MODE */
@@ -534,6 +547,7 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 	int ret;
 	unsigned init_timeout_usec = INIT_MAX_TIME_USEC;
 	u32 revid;
+	u8 temp;
 	const struct qmp_reg_val *reg = NULL, *misc = NULL, *pll = NULL;
 
 	dev_dbg(uphy->dev, "Initializing QMP phy\n");
@@ -601,6 +615,25 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 	if (ret) {
 		dev_err(uphy->dev, "Failed the main PHY configuration\n");
 		return ret;
+	}
+
+	temp = readl_relaxed(phy->base + USB3_QSERDES_TX_EMP_POST1_LVL);
+	printk("[USB] USB3_QSERDES_TX_EMP_POST1_LVL = %x\n", temp);
+	temp = readl_relaxed(phy->base + USB3_QSERDES_TX_DRV_LVL);
+	printk("[USB] USB3_QSERDES_TX_DRV_LVL = %x\n", temp);
+
+	if (tx_drv) {
+		writel_relaxed(tx_drv,
+				phy->base + USB3_QSERDES_TX_DRV_LVL);
+		temp = readl_relaxed(phy->base + USB3_QSERDES_TX_DRV_LVL);
+		printk("[USB] USB3_QSERDES_TX_DRV_LVL = %x\n", temp);
+	}
+
+	if (tx_emp) {
+		writel_relaxed(tx_emp,
+				phy->base + USB3_QSERDES_TX_EMP_POST1_LVL);
+		temp = readl_relaxed(phy->base + USB3_QSERDES_TX_EMP_POST1_LVL);
+		printk("[USB] USB3_QSERDES_TX_EMP_POST1_LVL = %x\n", temp);
 	}
 
 	/* Feature specific configurations */
