@@ -3242,6 +3242,7 @@ static ssize_t diagchar_read(struct file *file, char __user *buf, size_t count,
 		not memory device any more, the condition needs to be cleared */
 		driver->data_ready[index] ^= USER_SPACE_DATA_TYPE;
 		atomic_dec(&driver->data_ready_notif[index]);
+
 /*++ 2015/07/14, USB Team, PCN00012 ++*/
 	} else if (driver->data_ready[index] & USERMODE_DIAGFWD) {
 			DIAG_DBUG("diag: process woken up\n");
