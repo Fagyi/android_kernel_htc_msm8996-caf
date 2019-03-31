@@ -390,29 +390,6 @@ device_param_cb(managed_online_cpus, &param_ops_managed_online_cpus,
 							NULL, 0444);
 #endif
 
-static int set_touchboost(const char *buf, const struct kernel_param *kp)
-{
-	int val;
-
-	if (sscanf(buf, "%d\n", &val) != 1)
-		return -EINVAL;
-
-	touchboost = val;
-
-	return 0;
-}
-
-static int get_touchboost(char *buf, const struct kernel_param *kp)
-{
-	return snprintf(buf, PAGE_SIZE, "%d", touchboost);
-}
-
-static const struct kernel_param_ops param_ops_touchboost = {
-	.set = set_touchboost,
-	.get = get_touchboost,
-};
-device_param_cb(touchboost, &param_ops_touchboost, NULL, 0644);
-
 /*
  * Userspace sends cpu#:min_freq_value to vote for min_freq_value as the new
  * scaling_min. To withdraw its vote it needs to enter cpu#:0
