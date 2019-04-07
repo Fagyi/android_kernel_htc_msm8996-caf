@@ -44,7 +44,6 @@
 #include "wcd9xxx-resmgr-v2.h"
 #include "wcd_cpe_core.h"
 #include "wcdcal-hwdep.h"
-<<<<<<< HEAD
 /* HTC_AUD_START */
 #ifdef CONFIG_HTC_HEADSET_MGR
 #include <sound/htc_acoustic_alsa.h>
@@ -56,11 +55,9 @@
 #define pr_info(fmt, ...) pr_aud_info(fmt, ##__VA_ARGS__)
 #define pr_err(fmt, ...) pr_aud_err(fmt, ##__VA_ARGS__)
 /* HTC_AUD_END */
-=======
 #include <linux/proc_fs.h>
 #include <../drivers/base/regmap/internal.h>
 #include <linux/switch.h>
->>>>>>> 31d260b... Initial AudioWizard bringup
 
 #define TASHA_RX_PORT_START_NUMBER  16
 
