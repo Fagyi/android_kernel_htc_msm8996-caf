@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -937,6 +937,8 @@ err_create_pkt:
 	return rc;
 }
 
+static DECLARE_COMPLETION(release_resources_done);
+
 static int __alloc_imem(struct venus_hfi_device *device, unsigned long size)
 {
 	struct imem *imem = NULL;
@@ -1569,7 +1571,7 @@ static int __iface_cmdq_write_relaxed(struct venus_hfi_device *device,
 	__strict_check(device);
 
 	if (!__core_in_valid_state(device)) {
-		dprintk(VIDC_ERR, "%s - fw not in init state\n", __func__);
+		dprintk(VIDC_DBG, "%s - fw not in init state\n", __func__);
 		result = -EINVAL;
 		goto err_q_null;
 	}
@@ -2155,6 +2157,8 @@ static int venus_hfi_core_init(void *device)
 
 	dev = device;
 	mutex_lock(&dev->lock);
+
+	init_completion(&release_resources_done);
 
 	rc = __load_fw(dev);
 	if (rc) {
@@ -2944,7 +2948,7 @@ static int venus_hfi_session_process_batch(void *sess,
 		int num_etbs, struct vidc_frame_data etbs[],
 		int num_ftbs, struct vidc_frame_data ftbs[])
 {
-	int rc = -EINVAL, c = 0;
+	int rc = 0, c = 0;
 	struct hal_session *session = sess;
 	struct venus_hfi_device *device;
 	struct hfi_cmd_session_sync_process_packet pkt;
@@ -3316,6 +3320,8 @@ static void __process_sys_error(struct venus_hfi_device *device)
 {
 	struct hfi_sfr_struct *vsfr = NULL;
 
+	__set_state(device, VENUS_STATE_DEINIT);
+
 	/* Once SYS_ERROR received from HW, it is safe to halt the AXI.
 	 * With SYS_ERROR, Venus FW may have crashed and HW might be
 	 * active and causing unnecessary transactions. Hence it is
@@ -3455,6 +3461,7 @@ static int __response_handler(struct venus_hfi_device *device)
 			break;
 		case HAL_SYS_RELEASE_RESOURCE_DONE:
 			dprintk(VIDC_DBG, "Received SYS_RELEASE_RESOURCE\n");
+			complete(&release_resources_done);
 			break;
 		case HAL_SYS_INIT_DONE:
 			dprintk(VIDC_DBG, "Received SYS_INIT_DONE\n");
@@ -3554,10 +3561,6 @@ static int __response_handler(struct venus_hfi_device *device)
 					"Too many packets in message queue to handle at once, deferring read\n");
 			break;
 		}
-
-		/* do not read packets after sys error packet */
-		if (info->response_type == HAL_SYS_ERROR)
-			break;
 	}
 
 	if (requeue_pm_work && device->res->sw_power_collapsible) {
@@ -3621,12 +3624,6 @@ err_no_work:
 		i < num_responses; ++i) {
 		struct msm_vidc_cb_info *r = &device->response_pkt[i];
 
-		if (!__core_in_valid_state(device)) {
-			dprintk(VIDC_ERR,
-				"Ignore responses from %d to %d as device is in invalid state",
-				(i + 1), num_responses);
-			break;
-		}
 		device->callback(r->response_type, &r->response);
 	}
 
@@ -4425,7 +4422,7 @@ static int venus_hfi_get_fw_info(void *dev, struct hal_fw_info *fw_info)
 	struct venus_hfi_device *device = dev;
 	u32 smem_block_size = 0;
 	u8 *smem_table_ptr;
-	char version[VENUS_VERSION_LENGTH];
+	char version[VENUS_VERSION_LENGTH] = {0};
 	const u32 smem_image_index_venus = 14 * 128;
 
 	if (!device || !fw_info) {
@@ -4457,7 +4454,7 @@ static int venus_hfi_get_fw_info(void *dev, struct hal_fw_info *fw_info)
 
 	for (i--; i < VENUS_VERSION_LENGTH && j < VENUS_VERSION_LENGTH - 1; i++)
 		fw_info->version[j++] = version[i];
-	fw_info->version[j] = '\0';
+	fw_info->version[VENUS_VERSION_LENGTH - 1] = '\0';
 
 fail_version_string:
 	dprintk(VIDC_DBG, "F/W version retrieved : %s\n", fw_info->version);
@@ -4691,3 +4688,4 @@ int venus_hfi_initialize(struct hfi_device *hdev, u32 device_id,
 err_venus_hfi_init:
 	return rc;
 }
+

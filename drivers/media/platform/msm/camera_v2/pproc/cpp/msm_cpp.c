@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -44,7 +44,7 @@
 
 #define ENABLE_CPP_LOW		0
 
-#define CPP_CMD_TIMEOUT_MS	300
+#define CPP_CMD_TIMEOUT_MS	50
 #define MSM_CPP_INVALID_OFFSET	0x00000000
 #define MSM_CPP_NOMINAL_CLOCK	266670000
 #define MSM_CPP_TURBO_CLOCK	320000000
@@ -833,14 +833,9 @@ static irqreturn_t msm_cpp_irq(int irq_num, void *data)
 	if (irq_status & 0x8) {
 		tx_level = msm_camera_io_r(cpp_dev->base +
 			MSM_CPP_MICRO_FIFO_TX_STAT) >> 2;
-		if (tx_level < MSM_CPP_TX_FIFO_LEVEL) {
-			for (i = 0; i < tx_level; i++) {
-				tx_fifo[i] = msm_camera_io_r(cpp_dev->base +
-					MSM_CPP_MICRO_FIFO_TX_DATA);
-			}
-		} else {
-			pr_err("Fatal invalid tx level %d", tx_level);
-			goto err;
+		for (i = 0; i < tx_level; i++) {
+			tx_fifo[i] = msm_camera_io_r(cpp_dev->base +
+				MSM_CPP_MICRO_FIFO_TX_DATA);
 		}
 		spin_lock_irqsave(&cpp_dev->tasklet_lock, flags);
 		queue_cmd = &cpp_dev->tasklet_queue_cmd[cpp_dev->taskletq_idx];
@@ -895,7 +890,6 @@ static irqreturn_t msm_cpp_irq(int irq_num, void *data)
 		pr_debug("DEBUG_R1: 0x%x\n",
 			msm_camera_io_r(cpp_dev->base + 0x8C));
 	}
-err:
 	msm_camera_io_w(irq_status, cpp_dev->base + MSM_CPP_MICRO_IRQGEN_CLR);
 	return IRQ_HANDLED;
 }
@@ -4500,11 +4494,11 @@ static int msm_cpp_enable_debugfs(struct cpp_device *cpp_dev)
 {
 	struct dentry *debugfs_base;
 	debugfs_base = debugfs_create_dir("msm_cpp", NULL);
-	if (!debugfs_base)
+	if (IS_ERR_OR_NULL(debugfs_base))
 		return -ENOMEM;
 
-	if (!debugfs_create_file("error", S_IRUGO | S_IWUSR, debugfs_base,
-		(void *)cpp_dev, &cpp_debugfs_error))
+	if (IS_ERR_OR_NULL(debugfs_create_file("error", S_IRUGO | S_IWUSR, debugfs_base,
+		(void *)cpp_dev, &cpp_debugfs_error)))
 		return -ENOMEM;
 
 	return 0;
