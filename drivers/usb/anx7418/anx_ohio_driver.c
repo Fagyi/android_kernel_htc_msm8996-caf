@@ -2121,7 +2121,7 @@ static int update_firmware_otp(struct usb_typec_fwu_notifier *notifier, struct f
 	unsigned char data[9];
 	unsigned char read_data[9];
 	unsigned char *pfw;
-	int ret, i;
+	int ret = 0, i = 0;
 	unsigned int pre_progress = 0, progress = 0;
 	unsigned int fw_head_addr, new_fw_start_addr, new_fw_size;
 	unsigned int old_fw_start_addr, old_fw_size;

@@ -1735,7 +1735,7 @@ static ssize_t mcu_rw_test_store(struct device *dev,
 	char *token;
 	char *str_buf;
 	char *running;
-	u8 rw_cmd, reg_addr = 0, len = 0;
+	u8 rw_cmd = 0, reg_addr = 0, len = 0;
 	u8 data[32] = {0};
 
 	str_buf = kstrndup(buf, count, GFP_KERNEL);
