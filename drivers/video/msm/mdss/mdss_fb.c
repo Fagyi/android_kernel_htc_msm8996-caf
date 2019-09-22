@@ -95,7 +95,7 @@ static int fbi_list_index;
 			out = (v*v+46000*v-3000000)/50000;\
 			} while (0)
 
-bool backlight_dimmer = false;
+bool backlight_dimmer = true;
 module_param(backlight_dimmer, bool, 0755);
 static int backlight_min = 10;
 
