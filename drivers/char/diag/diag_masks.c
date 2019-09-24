@@ -841,7 +841,8 @@ static int diag_cmd_set_msg_mask(unsigned char *src_buf, int src_len,
 		goto end;
 	if (mask_size + write_len > dest_len)
 		mask_size = dest_len - write_len;
-	memcpy(dest_buf + write_len, src_buf + header_len, mask_size);
+	if (mask_size && src_len >= header_len + mask_size)
+		memcpy(dest_buf + write_len, src_buf + header_len, mask_size);
 	write_len += mask_size;
 /*++ 2015/10/26, USB Team, PCN00033 ++*/
 	for (i = 0; i < NUM_PERIPHERALS; i++) {
