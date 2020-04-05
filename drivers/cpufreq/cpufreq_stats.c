@@ -447,7 +447,7 @@ static inline atomic64_t *get_active_times(struct uid_entry *uid_entry)
 
 static int concurrent_active_time_text_seq_show(struct seq_file *m, void *v)
 {
-	if (!cpufreq_stats_initialized || !uid_cpupower_enable)
+	if (!cpufreq_all_freq_init || !uid_cpupower_enable)
 		return 0;
 
 	if (v == uid_hash_table) {
