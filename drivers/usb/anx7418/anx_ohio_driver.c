@@ -868,7 +868,7 @@ int ohio_hardware_enable_vconn(void)
 int ohio_hardware_disable_vconn(void)
 {
 	u32 rc;
-	uint8_t reg;
+	uint8_t reg = 0;
 	struct ohio_data *ohio = NULL;
 
 	if(ohio_client)
@@ -1801,7 +1801,7 @@ unsigned char eeprom_read_byte(unsigned int eeprom_begin_addr)
 static ssize_t version_show(struct device *pdev, struct device_attribute *attr,
 			   char *buf)
 {
-	u8 temp;
+	u8 temp = 0;
 	ohio_read_reg(OHIO_SLVAVE_I2C_ADDR, ANALOG_CTRL_3 , &temp);
 	pr_info("%s : FW version status: %x\n", __func__, temp);
 	return snprintf(buf, PAGE_SIZE, "0x%x\n", temp);

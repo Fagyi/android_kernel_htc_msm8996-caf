@@ -1006,7 +1006,7 @@ static ssize_t diag2arm9_read(struct file *fp, char __user *buf,
 	struct diag_context *ctxt = get_modem_ctxt();
 	struct usb_request *req;
 	int r = 0, xfer;
-	int ret;
+	int ret = 0;
 	DIAG_INFO("%s\n", __func__);
 	mutex_lock(&ctxt->diag2arm9_read_lock);
 

@@ -538,7 +538,7 @@ int htc_wifi_reset(int on)
 
 int htc_wifi_set_carddetect(int val)
 {
-	int ret;
+	int ret = 0;
 
     if (val == 1 && htc_wifi_rc_num >= 0)
         ret = msm_pcie_enumerate(htc_wifi_rc_num);

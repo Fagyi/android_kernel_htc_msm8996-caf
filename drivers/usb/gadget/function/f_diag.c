@@ -1009,7 +1009,7 @@ static struct usb_gadget_strings *diag_strings[] = {
 int diag_function_add(struct usb_configuration *c, const char *name,
 			int (*update_pid)(uint32_t, const char *))
 {
-	struct diag_context *dev;
+	struct diag_context *dev = NULL;
 	struct usb_diag_ch *_ch;
 	int found = 0, ret;
 	unsigned long flags;

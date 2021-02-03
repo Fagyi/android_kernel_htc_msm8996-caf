@@ -780,7 +780,7 @@ static int update_firmware(struct cypress_fw_update_data *fw_update_data,
 {
 	int ret = 0;
 	uint8_t *fw;
-	unsigned int line, header_len, used_len;
+	unsigned int line, header_len, used_len = 0;
 
 	pr_info("%s: bootloader mode=%d\n", __func__, cs->cs_bootloader_mode);
 	if (cs->cs_bootloader_mode == 0) {

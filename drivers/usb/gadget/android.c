@@ -814,7 +814,7 @@ acm_function_init(struct android_usb_function *f,
 	struct acm_function_config *config;
 /*++ 2015/06/23 USB Team, PCN00004 ++*/
 	struct android_dev *dev = cdev_to_android_dev(cdev);
-	char buf[128], *b, *name, *pname, *temp;
+	char buf[128], *b, *name = NULL, *pname = NULL, *temp;
 	int err = -1, i;
 /*-- 2015/06/23 USB Team, PCN00004 --*/
 
@@ -2224,7 +2224,7 @@ static int serial_function_init(struct android_usb_function *f,
 	struct serial_function_config *config;
 /*++ 2015/06/23 USB Team, PCN00004 ++*/
 	struct android_dev *dev = cdev_to_android_dev(cdev);
-	char buf[128], *b, *name, *pname, *temp;
+	char buf[128], *b, *name = NULL, *pname = NULL, *temp;
 	int err = -1, i;
 /*-- 2015/06/23 USB Team, PCN00004 --*/
 

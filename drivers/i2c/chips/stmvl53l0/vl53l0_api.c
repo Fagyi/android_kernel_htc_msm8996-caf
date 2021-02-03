@@ -2139,7 +2139,7 @@ VL53L0_Error VL53L0_compute_dmax(VL53L0_DEV Dev, uint16_t *pDmaxVal,
 	uint16_t DmaxCalRangeMilliMeter;
 	FixPoint1616_t DmaxCalSignalRateRtnMegaCps;
 	FixPoint1616_t LimitCheckValueRIT;
-	FixPoint1616_t LimitCheckValueSR;
+	FixPoint1616_t LimitCheckValueSR = 0;
 	FixPoint1616_t MinSignalNeeded;
 	FixPoint1616_t DmaxCalBlindAmbient;
 	uint32_t AmbientDiff97;

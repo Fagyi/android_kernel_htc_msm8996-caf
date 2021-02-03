@@ -7873,7 +7873,7 @@ static int dhd_preinit_proc(dhd_pub_t *dhd, int ifidx, char *name, char *value)
 
 static int dhd_preinit_config(dhd_pub_t *dhd, int ifidx)
 {
-	mm_segment_t old_fs;
+	mm_segment_t old_fs = {0};
 	struct kstat stat;
 	struct file *fp = NULL;
 	unsigned int len;
@@ -12212,7 +12212,7 @@ user_trigger_write_to_file(dhd_pub_t *dhd, uint8 *buf, int size)
 	int record_slot = 0;
 	char filename[64] = {0};
 	struct file *fp_dumpfile = NULL;
-	mm_segment_t old_fs;
+	mm_segment_t old_fs = {0};
 	loff_t pos = 0;
 	struct timespec ts;
 	struct rtc_time tm;
@@ -12298,7 +12298,7 @@ write_to_file(dhd_pub_t *dhd, uint8 *buf, int size)
 {
 	int ret = 0;
 	struct file *fp = NULL;
-	mm_segment_t old_fs;
+	mm_segment_t old_fs = {0};
 	loff_t pos = 0;
 #if defined(CUSTOMER_HW_ONE) && defined(DHD_FW_COREDUMP)
 	struct timespec ts;

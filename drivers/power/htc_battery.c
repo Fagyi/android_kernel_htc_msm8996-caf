@@ -2667,7 +2667,7 @@ bool htc_stats_is_valid(int category, unsigned long chg_time, unsigned long disc
 
 void htc_stats_update(int category, unsigned long chg_time, unsigned long dischg_time)
 {
-    struct htc_statistics_category* category_ptr;
+    struct htc_statistics_category* category_ptr = NULL;
     switch (category)
     {
         case HTC_STATS_CATEGORY_ALL: category_ptr = &g_htc_stats_category_all; break;
@@ -2681,7 +2681,7 @@ void htc_stats_update(int category, unsigned long chg_time, unsigned long dischg
 
 const char* htc_stats_category2str(int category)
 {
-    const char* ret;
+    const char* ret = NULL;
     switch (category)
     {
         case HTC_STATS_CATEGORY_ALL: ret = "all"; break;
@@ -2694,7 +2694,7 @@ void htc_stats_calculate_statistics_data(int category, unsigned long chg_time, u
 {
     int unplug_level = g_htc_stats_data.end_chg_batt_level;
     int plug_level = g_htc_stats_data.begin_chg_batt_level;
-    struct htc_statistics_category* category_ptr;
+    struct htc_statistics_category* category_ptr = NULL;
 
     switch (category) {
         case HTC_STATS_CATEGORY_ALL: category_ptr = &g_htc_stats_category_all; break;
