@@ -102,7 +102,7 @@ int mcu_do_rx(const struct cwmcu_bus_client *client, u8 *buf, int len)
 	tx_buf = NULL;
 	rx_buf = buf;
 	ret = spi_xfer(client, tx_buf, rx_buf, len);
-    if(ret < 0)
+	if(ret < 0)
 	return ret;
 	return len;
 }
