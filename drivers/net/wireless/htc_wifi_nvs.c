@@ -180,8 +180,7 @@ static ssize_t wifi_data_read_proc(struct file *file, char __user *buf, size_t s
     if (count > NVS_DATA_OFFSET - p)
         count = NVS_DATA_OFFSET - p;
 
-	ptr = get_wifi_nvs_ram();
-
+    ptr = get_wifi_nvs_ram();
     if (ptr != NULL) {
         if (copy_to_user(buf, (void*)(ptr+p), count))
         {
