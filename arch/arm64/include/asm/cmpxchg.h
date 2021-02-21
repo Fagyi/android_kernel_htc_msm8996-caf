@@ -65,6 +65,7 @@ static inline unsigned long __xchg(unsigned long x, volatile void *ptr, int size
 			: "memory");
 		break;
 	default:
+		ret = 0;
 		BUILD_BUG();
 	}
 
@@ -179,6 +180,7 @@ static inline int __cmpxchg_double(volatile void *ptr1, volatile void *ptr2,
 		} while (loop);
 		break;
 	default:
+		lost = 0;
 		BUILD_BUG();
 	}
 
