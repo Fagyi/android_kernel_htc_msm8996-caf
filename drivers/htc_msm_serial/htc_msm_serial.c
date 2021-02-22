@@ -73,13 +73,13 @@ static void init_from_device_tree(void)
     if(NULL == misc_node)
         return;
 
-	data = (char *)of_get_property(misc_node, LABEL_MSM_SERIAL_NUM, &property_size);
-	SECMSG("%s - length: %d\n", __func__, property_size);
-	if(property_size > sizeof(htc_msm_serial_num))
-		return;
+    data = (char *)of_get_property(misc_node, LABEL_MSM_SERIAL_NUM, &property_size);
+    SECMSG("%s - length: %d\n", __func__, property_size);
+    if(property_size > sizeof(htc_msm_serial_num))
+	return;
 
-	SECMSG("%s - LABEL_MSM_SERIAL_NUM: %s\n", __func__, data);
-	memcpy(htc_msm_serial_num, data, sizeof(htc_msm_serial_num));
+    SECMSG("%s - LABEL_MSM_SERIAL_NUM: %s\n", __func__, data);
+    memcpy(htc_msm_serial_num, data, sizeof(htc_msm_serial_num));
 
 }
 
