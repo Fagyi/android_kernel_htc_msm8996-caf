@@ -1064,7 +1064,7 @@ static int htc_smi_read_spi_conn_properties(struct device_node *node,
 					dev_err(drvdata->dev,
 						"%s: Failed get %s\n",
 						__func__, clock_name);
-					return rc;
+				return rc;
 			}
 
 			if (!strcmp(clock_name, "spi_clk"))
