@@ -583,11 +583,11 @@ static int msm_actuator_bivcm_write_focus(
 			(next_lens_pos +
 				(sign_direction * damping_code_step))) {
 /*HTC_START*/
-	if(a_ctrl->closeloop)
-        rc = lc898214_wrapper_i2c_write(a_ctrl, next_lens_pos, sign_direction, 0);
-	else
-		rc = msm_actuator_bivcm_handle_i2c_ops(a_ctrl,
-			next_lens_pos, damping_params->hw_params, wait_time);
+		if(a_ctrl->closeloop)
+			rc = lc898214_wrapper_i2c_write(a_ctrl, next_lens_pos, sign_direction, 0);
+		else
+			rc = msm_actuator_bivcm_handle_i2c_ops(a_ctrl,
+				next_lens_pos, damping_params->hw_params, wait_time);
 /*HTC_END*/
 		if (rc < 0) {
 			pr_err("%s:%d msm_actuator_bivcm_handle_i2c_ops failed\n",
@@ -599,12 +599,12 @@ static int msm_actuator_bivcm_write_focus(
 
 	if (curr_lens_pos != code_boundary) {
 /*HTC_START*/
-	if(a_ctrl->closeloop)
-		rc = lc898214_wrapper_i2c_write(a_ctrl, code_boundary, sign_direction, wait_time);
-	else
+		if(a_ctrl->closeloop)
+			rc = lc898214_wrapper_i2c_write(a_ctrl, code_boundary, sign_direction, wait_time);
+		else
 /*HTC_END*/
-		rc = msm_actuator_bivcm_handle_i2c_ops(a_ctrl,
-			code_boundary, damping_params->hw_params, wait_time);
+			rc = msm_actuator_bivcm_handle_i2c_ops(a_ctrl,
+				code_boundary, damping_params->hw_params, wait_time);
 
 		if (rc < 0) {
 			pr_err("%s:%d msm_actuator_bivcm_handle_i2c_ops failed\n",
