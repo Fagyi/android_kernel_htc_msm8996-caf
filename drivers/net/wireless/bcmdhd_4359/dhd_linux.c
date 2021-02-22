@@ -4038,7 +4038,7 @@ done:
 	/* HTC_WIFI_START */
 	// ** [HPKB#7947] Tx stuck detection
 #if defined(CUSTOMER_HW_ONE)
-	if ((dhd->pub.old_tx_completed_count == dhd->pub.new_tx_completed_count)) {
+	if (dhd->pub.old_tx_completed_count == dhd->pub.new_tx_completed_count) {
 		if (dhd->pub.xmit_count == 0) {
 			dhd->pub.xmit_record_time = ((uint32)jiffies_to_msecs(jiffies));
 		}
