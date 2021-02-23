@@ -142,13 +142,13 @@ static const uint8 wf_chspec_bw_mhz[] =
 #define WF_NUM_BW \
 	(sizeof(wf_chspec_bw_mhz)/sizeof(uint8))
 
-#if defined(CUSTOMER_HW_ONE) && defined(SUPPORT_2G_HT40)
+//#if defined(CUSTOMER_HW_ONE) && defined(SUPPORT_2G_HT40)
 /* 40MHz channels in 2.4GHz band */
-static const uint8 wf_2g_40m_chans[] =
-{3, 4, 5, 6, 7, 8, 9, 10, 11};
-#define WF_NUM_2G_40M_CHANS \
-	(sizeof(wf_2g_40m_chans)/sizeof(uint8))
-#endif /* CUSTOMER_HW_ONE && SUPPORT_2G_HT40 */
+//static const uint8 wf_2g_40m_chans[] =
+//{3, 4, 5, 6, 7, 8, 9, 10, 11};
+//#define WF_NUM_2G_40M_CHANS \
+//	(sizeof(wf_2g_40m_chans)/sizeof(uint8))
+//#endif /* CUSTOMER_HW_ONE && SUPPORT_2G_HT40 */
 
 /* 40MHz channels in 5GHz band */
 static const uint8 wf_5g_40m_chans[] =
