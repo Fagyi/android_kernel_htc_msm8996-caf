@@ -4394,11 +4394,11 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 					if (h->protocol == IPPROTO_TCP) {
 						struct tcphdr *tcp_header = (struct tcphdr *)((u8 *)h + sizeof(struct iphdr));
 						if (tcp_header->dest)
-							DHD_ERROR(("%s: SRC TCP PORT: %hu \n", __FUNCTION__, ntohs(tcp_header->source)));
+							DHD_ERROR(("%s: SRC TCP PORT: %d \n", __FUNCTION__, ntohs(tcp_header->source)));
 					} else if (h->protocol == IPPROTO_UDP) {
 						struct udphdr *udp_header = (struct udphdr *)((u8 *)h + sizeof(struct iphdr));
 						if (udp_header->source)
-							DHD_ERROR(("%s: SRC UDP PORT: %hu \n", __FUNCTION__, ntohs(udp_header->source)));
+							DHD_ERROR(("%s: SRC UDP PORT: %d \n", __FUNCTION__, ntohs(udp_header->source)));
 					} else if (h->protocol == IPPROTO_IGMP) {
 						DHD_ERROR(("%s: Protocol: IGMP \n", __FUNCTION__));
 					} else if (h->protocol == IPPROTO_ICMP) {
@@ -4414,11 +4414,11 @@ dhd_rx_frame(dhd_pub_t *dhdp, int ifidx, void *pktbuf, int numpkt, uint8 chan)
 					if (h->nexthdr == IPPROTO_TCP) {
 						struct tcphdr *tcp_header = (struct tcphdr *)((u8 *)h + sizeof(struct ipv6hdr));
 						if (tcp_header->dest)
-							DHD_ERROR(("%s: SRC TCP PORT: %hu \n", __FUNCTION__, ntohs(tcp_header->source)));
+							DHD_ERROR(("%s: SRC TCP PORT: %d \n", __FUNCTION__, ntohs(tcp_header->source)));
 					} else if (h->nexthdr == IPPROTO_UDP) {
 						struct udphdr *udp_header = (struct udphdr *)((u8 *)h + sizeof(struct ipv6hdr));
 						if (udp_header->source)
-							DHD_ERROR(("%s: SRC UDP PORT: %hu \n", __FUNCTION__, ntohs(udp_header->source)));
+							DHD_ERROR(("%s: SRC UDP PORT: %d \n", __FUNCTION__, ntohs(udp_header->source)));
 					} else if (h->nexthdr == IPPROTO_IGMP) {
 						DHD_ERROR(("%s: Protocol: IGMP \n", __FUNCTION__));
 					} else if (h->nexthdr == IPPROTO_ICMPV6) {
