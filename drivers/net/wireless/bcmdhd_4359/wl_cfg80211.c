@@ -17827,9 +17827,9 @@ struct wiphy *wiphy)
 	}
 
 	if (CHSPEC_IS5G(chanspec))
-		freq = ieee80211_channel_to_frequency(channel, NL80211_BAND_5GHZ);
+		freq = ieee80211_channel_to_frequency(channel, IEEE80211_BAND_5GHZ);
 	else
-		freq = ieee80211_channel_to_frequency(channel, NL80211_BAND_2GHZ);
+		freq = ieee80211_channel_to_frequency(channel, IEEE80211_BAND_2GHZ);
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION (3, 8, 0))
 	cfg80211_chandef_create(chandef, ieee80211_get_channel(wiphy, freq), chan_type);
@@ -18255,7 +18255,7 @@ void htc_send_hotspot_event(struct net_device *ndev, char *event){
 	uint8_t *we_custom_event_generic = NULL;
 
 	memset(&wrqu, '\0', sizeof(wrqu));
-	snprintf(unknownSTAEvent, IW_CUSTOM_MAX, event);
+	snprintf(unknownSTAEvent, IW_CUSTOM_MAX, "%s", event);
 	we_event = IWEVCUSTOM;  /* Discovered a new node (AP mode). */
 	wrqu.data.pointer = unknownSTAEvent;
 	wrqu.data.length = strlen(unknownSTAEvent);
