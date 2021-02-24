@@ -47,7 +47,7 @@ static int reboot_block_command(int reason, const char* msg)
 
 	block.reason = reason;
 	memset(&block.msg[0], 0, sizeof(block.msg));
-	strlcpy(&block.msg[0], msg, strlen(msg));
+	strscpy(&block.msg[0], msg, sizeof(msg));
 
 	snprintf(filename, sizeof(filename),
 			"/dev/block/bootdevice/by-name/%s", pname);
