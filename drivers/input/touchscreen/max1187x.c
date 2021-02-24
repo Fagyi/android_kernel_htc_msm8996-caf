@@ -2565,7 +2565,7 @@ u16 calculate_checksum(u16 *buf, u16 n)
 static u8 compare_Touch_Configuration(struct data *ts) {
 	int i, ret;
 
-	if (ts->max11871_Touch_Configuration_Data) {
+	if (&(ts->max11871_Touch_Configuration_Data) != NULL) {
 		for (i=0; i<RETRY_TIMES; i++) {
 			DISABLE_IRQ();
 			ret = get_touch_config(ts->client);
@@ -2601,7 +2601,7 @@ static u8 compare_Calibration_Table(struct data *ts) {
 	int i, ret;
 	u16 mtpdata[]={0x0000, 0x0000};
 
-	if (ts->max11871_Calibration_Table_Data) {
+	if (&(ts->max11871_Calibration_Table_Data) != NULL) {
 		for (i=0; i<RETRY_TIMES; i++) {
 			DISABLE_IRQ();
 			//Get calibration table
@@ -2640,7 +2640,7 @@ static u8 compare_Private_Configuration(struct data *ts) {
 	int i, ret;
 	u16 mtpdata[]={0x0000, 0x0000};
 
-	if (ts->max11871_Private_Configuration_Data) {
+	if (&(ts->max11871_Private_Configuration_Data) != NULL) {
 		for (i=0; i<RETRY_TIMES; i++) {
 			DISABLE_IRQ();
 			//Get private configuration
@@ -2679,7 +2679,7 @@ static u8 compare_Lookup_Table_X(struct data *ts) {
 	int i, ret;
 	u16 mtpdata[]={0x0000, 0x0000, 0x0000};
 
-	if (ts->max11871_Lookup_Table_X_Data) {
+	if (&(ts->max11871_Lookup_Table_X_Data) != NULL) {
 		for (i=0; i<RETRY_TIMES; i++) {
 			DISABLE_IRQ();
 			//Get Lookup table X
@@ -2719,7 +2719,7 @@ static u8 compare_Lookup_Table_Y(struct data *ts) {
 	int i, ret;
 	u16 mtpdata[]={0x0000, 0x0000, 0x0000};
 
-	if (ts->max11871_Lookup_Table_Y_Data) {
+	if (&(ts->max11871_Lookup_Table_Y_Data) != NULL) {
 		for (i=0; i<RETRY_TIMES; i++) {
 			DISABLE_IRQ();
 			//Get Lookup table Y
@@ -2759,7 +2759,7 @@ static u8 compare_Image_Factor(struct data *ts) {
 	int i, ret;
 	u16 mtpdata[]={0x0000, 0x0000};
 
-	if (ts->max11871_Image_Factor_Table && config_num[ts->config_protocol][4]) {
+	if (&(ts->max11871_Image_Factor_Table) != NULL && config_num[ts->config_protocol][4]) {
 		for (i=0; i<RETRY_TIMES; i++) {
 			DISABLE_IRQ();
 			//Get Image Factor Table
@@ -3073,39 +3073,39 @@ static void check_fw_and_config(struct data *ts)
 				ts->config_protocol = 0;
 			else
 				ts->config_protocol = 1;
-			if(ts->fw_config->config_touch) {
+			if(&(ts->fw_config->config_touch) != NULL) {
 				ts->max11871_Touch_Configuration_Data[0] = 0x0001;
 				ts->max11871_Touch_Configuration_Data[1] = config_num[ts->config_protocol][0];
 				memcpy(ts->max11871_Touch_Configuration_Data+2,
 					ts->fw_config->config_touch, BYTE_SIZE(config_num[ts->config_protocol][0]));
 			}
-			if(ts->fw_config->config_cal) {
+			if(&(ts->fw_config->config_cal) != NULL) {
 				ts->max11871_Calibration_Table_Data[0] = 0x0010;
 				ts->max11871_Calibration_Table_Data[1] = config_num[ts->config_protocol][1];
 				memcpy(ts->max11871_Calibration_Table_Data+2,
 					ts->fw_config->config_cal, BYTE_SIZE(config_num[ts->config_protocol][1]));
 			}
-			if(ts->fw_config->config_private) {
+			if(&(ts->fw_config->config_private) != NULL) {
 				ts->max11871_Private_Configuration_Data[0] = 0x0003;
 				ts->max11871_Private_Configuration_Data[1] = config_num[ts->config_protocol][2];
 				memcpy(ts->max11871_Private_Configuration_Data+2,
 					ts->fw_config->config_private, BYTE_SIZE(config_num[ts->config_protocol][2]));
 			}
-			if(ts->fw_config->config_lin_x) {
+			if(&(ts->fw_config->config_lin_x) != NULL) {
 				ts->max11871_Lookup_Table_X_Data[0] = 0x0030;
 				ts->max11871_Lookup_Table_X_Data[1] = config_num[ts->config_protocol][3]+1;
 				ts->max11871_Lookup_Table_X_Data[2] = 0x0000;
 				memcpy(ts->max11871_Lookup_Table_X_Data+3,
 					ts->fw_config->config_lin_x, BYTE_SIZE(config_num[ts->config_protocol][3]));
 			}
-			if(ts->fw_config->config_lin_y) {
+			if(&(ts->fw_config->config_lin_y) != NULL) {
 				ts->max11871_Lookup_Table_Y_Data[0] = 0x0030;
 				ts->max11871_Lookup_Table_Y_Data[1] = config_num[ts->config_protocol][3]+1;
 				ts->max11871_Lookup_Table_Y_Data[2] = 0x0001;
 				memcpy(ts->max11871_Lookup_Table_Y_Data+3,
 					ts->fw_config->config_lin_y, BYTE_SIZE(config_num[ts->config_protocol][3]));
 			}
-			if(ts->fw_config->config_ifactor && config_num[ts->config_protocol][4]) {
+			if(&(ts->fw_config->config_ifactor) != NULL && config_num[ts->config_protocol][4]) {
 				memcpy(ts->max11871_Image_Factor_Table,
 					ts->fw_config->config_ifactor, BYTE_SIZE(MAX1187X_IMAGE_FACTOR_MAX));
 			}
