@@ -57,7 +57,7 @@ int get_partition_num_by_name(char *name)
 	struct htc_emmc_partition *ptn = emmc_partitions;
 	int i;
 
-	for (i = 0; i < MSM_MAX_PARTITIONS && ptn->partition_name; i++, ptn++) {
+	for (i = 0; i < MSM_MAX_PARTITIONS && ptn->partition_name != NULL; i++, ptn++) {
 		if (strcmp(ptn->partition_name, name) == 0)
 			return ptn->dev_num;
 	}
