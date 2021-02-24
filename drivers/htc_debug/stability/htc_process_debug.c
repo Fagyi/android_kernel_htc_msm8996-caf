@@ -62,10 +62,10 @@ void send_signal_debug_dump(int sig, struct task_struct *t)
 	}
 #endif
 
-	if (t->comm) {
+	if (&(t->comm) != NULL) {
 		read_lock(&task_comm_lock);
 		list_for_each_entry(tc, &task_comm_list, list) {
-			if (sig != SIGCHLD && tc->comm && (!strncmp(t->comm, tc->comm, TASK_COMM_LEN)) ) {
+			if (sig != SIGCHLD && tc->comm != NULL && (!strncmp(t->comm, tc->comm, TASK_COMM_LEN)) ) {
 				printk("%s: %s(%d)[group %s(%d), parent %s(%d)] send signal %d to %s(%d)\n", __func__,
 					current->comm, current->pid,
 					(current->group_leader) ? current->group_leader->comm : "Unknown",
@@ -87,10 +87,10 @@ void do_group_exit_debug_dump(int exit_code)
 	struct task_struct *t = (current->group_leader) ? current->group_leader : current;
 	struct task_comm *tc;
 
-	if (t->comm) {
+	if (&(t->comm) != NULL) {
 		read_lock(&task_comm_lock);
 		list_for_each_entry(tc, &task_comm_list, list) {
-			if (tc->comm && (!strncmp(t->comm, tc->comm, TASK_COMM_LEN)) ) {
+			if (tc->comm != NULL && (!strncmp(t->comm, tc->comm, TASK_COMM_LEN)) ) {
 				printk(KERN_INFO "%s: %s(%d)[group %s(%d) parent %s(%d)] call exit with code %d\n", __func__,
 				current->comm, current->pid,
 				(current->group_leader) ? current->group_leader->comm : "Unknown",
