@@ -344,7 +344,7 @@ static void do_signal(struct pt_regs *regs)
 
 	struct task_struct *t;
 	t = current;
-	if (t->comm && strstr(t->comm, "dq_log")) {
+	if (&(t->comm) != NULL && strstr(t->comm, "dq_log")) {
 		printk("[%s] %s ++\n", __func__, t->comm);
 	}
 	/*
@@ -394,7 +394,7 @@ static void do_signal(struct pt_regs *regs)
 			regs->pc = continue_addr;
 		}
 
-		if (t->comm && strstr(t->comm, "dq_log")) {
+		if (&(t->comm) != NULL  && strstr(t->comm, "dq_log")) {
 			printk("[%s] %s handle_signal --\n", __func__, t->comm);
 		}
 
