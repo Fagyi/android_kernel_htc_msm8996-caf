@@ -210,8 +210,8 @@ static ssize_t anx7730_write_reg_store(struct device *dev,
 		return -EINVAL;
 	}
 
-	ret = snprintf(&op, 2, buf);
-	ret = snprintf(&i, 2, buf + 1);
+	ret = snprintf(&op, 1, buf);
+	ret = snprintf(&i, 1, buf + 1);
 	ret = snprintf(r, 3, buf + 2);
 
 	id = simple_strtoul(&i, NULL, 10);
@@ -302,8 +302,8 @@ static ssize_t anx7816_write_reg_store(struct device *dev,
 		return -EINVAL;
 	}
 
-	ret = snprintf(&op, 2, buf);
-	ret = snprintf(&i, 2, buf + 1);
+	ret = snprintf(&op, 1, buf);
+	ret = snprintf(&i, 1, buf + 1);
 	ret = snprintf(r, 3, buf + 2);
 
 	id = simple_strtoul(&i, NULL, 10);
