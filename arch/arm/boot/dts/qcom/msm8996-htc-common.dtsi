@@ -84,9 +84,6 @@
 &soc {
 	htc_radio_smem {
 		compatible = "htc,htc_radio_smem";
-		reg = <0x83CF0000 0x10000>;
-                memory-region = <&htc_smlog_mem>;
-		reg-names = "smem-start-addr";
 	};
 
 	qcom,smdtty {
