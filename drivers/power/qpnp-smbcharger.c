@@ -2019,8 +2019,11 @@ static int smbchg_set_aicl_rerun_period_s(struct smbchg_chip *chip,
 
 static struct power_supply *get_parallel_psy(struct smbchg_chip *chip)
 {
-	if (!chip->parallel.avail)
-		return NULL;
+	{
+		if (!chip->parallel.avail)
+			return NULL;
+			return chip->parallel.psy;
+	}
 	if (chip->parallel.psy)
 		return chip->parallel.psy;
 	chip->parallel.psy = power_supply_get_by_name("usb-parallel");
